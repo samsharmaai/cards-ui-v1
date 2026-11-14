@@ -2,9 +2,27 @@
   const LS_KEY = 'pd_saved_pass_v1';
   const LS_STATE = 'pd_progress_v1';
   const LS_THEME = 'pd_theme_v1';
+  const LS_SYNC = 'pd_sync_cfg_v1';
+  const SYNC_FILENAME = 'cadence_sync_v1.json';
   const IDLE_LIMIT_MS = 90000;
 
+  let pendingPairCode = null;
+  if (window.location.hash && window.location.hash.includes('pair=')) {
+    try {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      pendingPairCode = params.get('pair');
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    } catch (_) {}
+  }
+
   let DATA = null;
+  let SESSION_PASS = null;
+  let syncCfg = null;
+  let syncPushTimer = null;
+  let syncInFlight = false;
+  let lastSyncPullAt = 0;
+  let syncDirty = false;
+
   let progress = loadProgress();
   let lastActiveAt = Date.now();
   let unsavedSecTicks = 0;
@@ -23,6 +41,11 @@
     timerHandle: null,
     didInitialResume: false,
     showTimeDrawer: false,
+    showSyncDrawer: false,
+    showPasteBox: false,
+    syncStatus: 'idle',
+    syncMsg: '',
+    lastSyncedAt: 0,
     picker: null
   };
 
@@ -62,50 +85,122 @@
     return label;
   }
 
-  function loadProgress() {
-    const defaults = {
-      flaggedCards: {},
-      doneCards: {},
-      answers: {},
-      missedQs: {},
-      doneDays: {},
-      dailyActivity: {},
-      dailySeconds: {},
-      lastDeckIdx: 0,
-      lastCardIdx: 0
+  function normalizeProgress(parsed = {}) {
+    return {
+      flaggedCards: parsed.flaggedCards || {},
+      doneCards: parsed.doneCards || {},
+      answers: parsed.answers || {},
+      missedQs: parsed.missedQs || {},
+      doneDays: parsed.doneDays || {},
+      dailyActivity: parsed.dailyActivity || {},
+      dailySeconds: parsed.dailySeconds || {},
+      cardMeta: parsed.cardMeta || {},
+      qMeta: parsed.qMeta || {},
+      dayMeta: parsed.dayMeta || {},
+      lastDeckIdx: parsed.lastDeckIdx || 0,
+      lastCardIdx: parsed.lastCardIdx || 0
     };
-    try {
-      const raw = localStorage.getItem(LS_STATE);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return {
-          ...defaults,
-          ...parsed,
-          flaggedCards: parsed.flaggedCards || {},
-          doneCards: parsed.doneCards || {},
-          answers: parsed.answers || {},
-          missedQs: parsed.missedQs || {},
-          doneDays: parsed.doneDays || {},
-          dailyActivity: parsed.dailyActivity || {},
-          dailySeconds: parsed.dailySeconds || {}
-        };
-      }
-    } catch (_) {}
-    return defaults;
   }
 
-  function saveProgress() {
+  function loadProgress() {
+    try {
+      const raw = localStorage.getItem(LS_STATE);
+      if (raw) return normalizeProgress(JSON.parse(raw));
+    } catch (_) {}
+    return normalizeProgress({});
+  }
+
+  function mergeProgress(localRaw, remoteRaw) {
+    const a = normalizeProgress(localRaw);
+    const b = normalizeProgress(remoteRaw);
+    const out = normalizeProgress({});
+
+    // Union of mastered cards
+    Object.keys({ ...a.doneCards, ...b.doneCards }).forEach(k => {
+      if (a.doneCards[k] || b.doneCards[k]) out.doneCards[k] = true;
+    });
+
+    // Timestamp-aware merge for saved/flagged cards
+    Object.keys({ ...a.flaggedCards, ...b.flaggedCards, ...a.cardMeta, ...b.cardMeta }).forEach(k => {
+      const ta = a.cardMeta[k] || 0;
+      const tb = b.cardMeta[k] || 0;
+      if (ta > tb) {
+        if (a.flaggedCards[k]) out.flaggedCards[k] = true;
+        out.cardMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.flaggedCards[k]) out.flaggedCards[k] = true;
+        out.cardMeta[k] = tb;
+      } else {
+        if (a.flaggedCards[k] || b.flaggedCards[k]) out.flaggedCards[k] = true;
+        if (ta) out.cardMeta[k] = ta;
+      }
+    });
+
+    // Timestamp-aware merge for practice answers & missed items
+    Object.keys({ ...a.answers, ...b.answers, ...a.qMeta, ...b.qMeta }).forEach(k => {
+      const ta = a.qMeta[k] || 0;
+      const tb = b.qMeta[k] || 0;
+      if (ta > tb) {
+        if (a.answers[k] !== undefined) out.answers[k] = a.answers[k];
+        if (a.missedQs[k]) out.missedQs[k] = true;
+        out.qMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.answers[k] !== undefined) out.answers[k] = b.answers[k];
+        if (b.missedQs[k]) out.missedQs[k] = true;
+        out.qMeta[k] = tb;
+      } else {
+        const pick = a.answers[k] !== undefined ? a.answers[k] : b.answers[k];
+        if (pick !== undefined) out.answers[k] = pick;
+        if (a.missedQs[k] || b.missedQs[k]) out.missedQs[k] = true;
+        if (ta) out.qMeta[k] = ta;
+      }
+    });
+
+    // Timestamp-aware merge for plan checklist days
+    Object.keys({ ...a.doneDays, ...b.doneDays, ...a.dayMeta, ...b.dayMeta }).forEach(k => {
+      const ta = a.dayMeta[k] || 0;
+      const tb = b.dayMeta[k] || 0;
+      if (ta > tb) {
+        if (a.doneDays[k]) out.doneDays[k] = true;
+        out.dayMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.doneDays[k]) out.doneDays[k] = true;
+        out.dayMeta[k] = tb;
+      } else {
+        if (a.doneDays[k] || b.doneDays[k]) out.doneDays[k] = true;
+        if (ta) out.dayMeta[k] = ta;
+      }
+    });
+
+    // Per-day max for study activity & background minutes
+    Object.keys({ ...a.dailyActivity, ...b.dailyActivity }).forEach(dk => {
+      const v = Math.max(a.dailyActivity[dk] || 0, b.dailyActivity[dk] || 0);
+      if (v > 0) out.dailyActivity[dk] = v;
+    });
+    Object.keys({ ...a.dailySeconds, ...b.dailySeconds }).forEach(dk => {
+      const v = Math.max(a.dailySeconds[dk] || 0, b.dailySeconds[dk] || 0);
+      if (v > 0) out.dailySeconds[dk] = v;
+    });
+
+    return out;
+  }
+
+  function saveProgress(triggerCloud = false) {
     try {
       localStorage.setItem(LS_STATE, JSON.stringify(progress));
       unsavedSecTicks = 0;
     } catch (_) {}
+    if (triggerCloud && syncCfg) {
+      syncDirty = true;
+      scheduleCloudPush();
+    }
   }
 
   function recordStudyAction(amount = 1) {
     const k = localDateKey();
     progress.dailyActivity[k] = (progress.dailyActivity[k] || 0) + amount;
     lastActiveAt = Date.now();
-    saveProgress();
+    saveProgress(true);
   }
 
   function isDayActive(dk) {
@@ -167,13 +262,18 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       lastActiveAt = Date.now();
-    } else if (unsavedSecTicks > 0) {
-      saveProgress();
+      if (DATA && syncCfg && (Date.now() - lastSyncPullAt > 15000)) {
+        syncWithCloud({ silent: true });
+      }
+    } else {
+      if (unsavedSecTicks > 0) saveProgress(false);
+      if (syncDirty && syncCfg) flushCloudPushKeepalive();
     }
   });
 
   window.addEventListener('pagehide', () => {
-    if (unsavedSecTicks > 0) saveProgress();
+    if (unsavedSecTicks > 0) saveProgress(false);
+    if (syncDirty && syncCfg) flushCloudPushKeepalive();
   });
 
   // Silent background study-time tracker (never renders ticking seconds)
@@ -186,10 +286,15 @@
     const wasLit = isDayActive(tk);
     progress.dailySeconds[tk] = (progress.dailySeconds[tk] || 0) + 1;
     unsavedSecTicks++;
-    if (unsavedSecTicks >= 5) saveProgress();
+    if (unsavedSecTicks >= 5) saveProgress(false);
 
     const nowLit = isDayActive(tk);
     const todaySecs = progress.dailySeconds[tk];
+
+    if (todaySecs % 60 === 0 && syncCfg) {
+      syncDirty = true;
+      scheduleCloudPush();
+    }
 
     if (!wasLit && nowLit) {
       const stats = computeStreakStats();
@@ -202,7 +307,7 @@
         todayCircle.classList.add('lit');
         todayCircle.textContent = '✓';
       }
-      saveProgress();
+      saveProgress(true);
     }
 
     if (ui.showTimeDrawer && todaySecs % 60 === 0) {
@@ -254,9 +359,26 @@
     return arr;
   }
 
-  async function unlockWithPasscode(passcode) {
-    const res = await fetch('./vault.json', { cache: 'no-cache' });
-    const vault = await res.json();
+  function bytesToB64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  function toUrlCode(str) {
+    return btoa(unescape(encodeURIComponent(str)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  }
+
+  function fromUrlCode(code) {
+    let b64 = code.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    return decodeURIComponent(escape(atob(b64)));
+  }
+
+  async function deriveAesKey(passcode, saltBytes, iterations, usages) {
     const enc = new TextEncoder();
     const baseKey = await crypto.subtle.importKey(
       'raw',
@@ -265,24 +387,300 @@
       false,
       ['deriveKey']
     );
-    const aesKey = await crypto.subtle.deriveKey(
+    return crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
-        salt: b64ToBytes(vault.salt),
-        iterations: vault.iter,
+        salt: saltBytes,
+        iterations,
         hash: 'SHA-256'
       },
       baseKey,
       { name: 'AES-GCM', length: 256 },
       false,
+      usages
+    );
+  }
+
+  async function decryptJsonWithPasscode(payload, passcode) {
+    const aesKey = await deriveAesKey(
+      passcode,
+      b64ToBytes(payload.salt),
+      payload.iter || 100000,
       ['decrypt']
     );
     const plainBuf = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: b64ToBytes(vault.iv) },
+      { name: 'AES-GCM', iv: b64ToBytes(payload.iv) },
       aesKey,
-      b64ToBytes(vault.ct)
+      b64ToBytes(payload.ct)
     );
     return JSON.parse(new TextDecoder().decode(plainBuf));
+  }
+
+  async function encryptWithPasscode(obj, passcode, iterations = 100000) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const aesKey = await deriveAesKey(passcode, salt, iterations, ['encrypt']);
+    const plainBytes = new TextEncoder().encode(JSON.stringify(obj));
+    const ctBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plainBytes);
+    return {
+      v: 1,
+      iter: iterations,
+      salt: bytesToB64(salt),
+      iv: bytesToB64(iv),
+      ct: bytesToB64(new Uint8Array(ctBuf))
+    };
+  }
+
+  async function unlockWithPasscode(passcode) {
+    const res = await fetch('./vault.json', { cache: 'no-cache' });
+    const vault = await res.json();
+    const data = await decryptJsonWithPasscode(vault, passcode);
+    SESSION_PASS = passcode.trim();
+    return data;
+  }
+
+  async function saveSyncCfgEncrypted(cfg) {
+    if (!cfg || !SESSION_PASS) {
+      localStorage.removeItem(LS_SYNC);
+      return;
+    }
+    const enc = await encryptWithPasscode(cfg, SESSION_PASS, 100000);
+    localStorage.setItem(LS_SYNC, JSON.stringify(enc));
+  }
+
+  async function loadSyncCfgDecrypted() {
+    if (!SESSION_PASS) return null;
+    try {
+      const raw = localStorage.getItem(LS_SYNC);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const cfg = await decryptJsonWithPasscode(parsed, SESSION_PASS);
+      if (cfg && cfg.token && cfg.gistId) return cfg;
+    } catch (_) {}
+    return null;
+  }
+
+  function syncBtnLabel() {
+    if (!syncCfg) return '☁';
+    if (ui.syncStatus === 'syncing') return '☁↻';
+    if (ui.syncStatus === 'err') return '☁!';
+    return '☁✓';
+  }
+
+  function syncBtnStyle() {
+    if (!syncCfg) return 'padding:7px 9px;';
+    if (ui.syncStatus === 'err') return 'padding:7px 9px;border-color:var(--danger);color:var(--danger);';
+    return 'padding:7px 9px;border-color:rgba(16,185,129,0.55);color:var(--success);';
+  }
+
+  function updateSyncHeaderBtn() {
+    const btn = document.getElementById('sync-open-btn');
+    if (!btn) return;
+    btn.textContent = syncBtnLabel();
+    btn.setAttribute('style', syncBtnStyle());
+  }
+
+  function scheduleCloudPush() {
+    if (!syncCfg || !SESSION_PASS) return;
+    clearTimeout(syncPushTimer);
+    syncPushTimer = setTimeout(() => {
+      syncWithCloud({ silent: true });
+    }, 2800);
+  }
+
+  async function flushCloudPushKeepalive() {
+    if (!syncCfg || !SESSION_PASS || syncInFlight) return;
+    try {
+      const encOut = await encryptWithPasscode(progress, SESSION_PASS, 100000);
+      syncDirty = false;
+      fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
+        method: 'PATCH',
+        keepalive: true,
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${syncCfg.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: { [SYNC_FILENAME]: { content: JSON.stringify(encOut) } }
+        })
+      }).catch(() => { syncDirty = true; });
+    } catch (_) {}
+  }
+
+  async function syncWithCloud({ silent = false, isInitial = false } = {}) {
+    if (!syncCfg || !SESSION_PASS || syncInFlight) return;
+    clearTimeout(syncPushTimer);
+    syncInFlight = true;
+    ui.syncStatus = 'syncing';
+    if (!silent || ui.showSyncDrawer) renderApp();
+    else updateSyncHeaderBtn();
+
+    try {
+      const getRes = await fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${syncCfg.token}`
+        }
+      });
+      if (!getRes.ok) throw new Error(`HTTP ${getRes.status}`);
+      const gist = await getRes.json();
+
+      const beforeSig = JSON.stringify([
+        progress.doneCards,
+        progress.flaggedCards,
+        progress.answers,
+        progress.doneDays
+      ]);
+
+      const remoteContent = gist.files && gist.files[SYNC_FILENAME] && gist.files[SYNC_FILENAME].content;
+      if (remoteContent) {
+        try {
+          const remoteEnc = JSON.parse(remoteContent);
+          const remoteData = await decryptJsonWithPasscode(remoteEnc, SESSION_PASS);
+          progress = mergeProgress(progress, remoteData);
+          saveProgress(false);
+        } catch (_) {}
+      }
+
+      const encOut = await encryptWithPasscode(progress, SESSION_PASS, 100000);
+      const patchRes = await fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
+        method: 'PATCH',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${syncCfg.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: { [SYNC_FILENAME]: { content: JSON.stringify(encOut) } }
+        })
+      });
+      if (!patchRes.ok) throw new Error(`HTTP ${patchRes.status}`);
+
+      const afterSig = JSON.stringify([
+        progress.doneCards,
+        progress.flaggedCards,
+        progress.answers,
+        progress.doneDays
+      ]);
+
+      lastSyncPullAt = Date.now();
+      ui.lastSyncedAt = Date.now();
+      syncDirty = false;
+      ui.syncStatus = 'ok';
+
+      if (isInitial && afterSig !== beforeSig) {
+        jumpToResumeTarget();
+      }
+
+      const activeId = document.activeElement && document.activeElement.id;
+      const isTyping = activeId === 'trig-search' || activeId === 'sync-key-input' || activeId === 'manual-sync-input';
+      if ((!silent || ui.showSyncDrawer || afterSig !== beforeSig) && !isTyping) {
+        renderApp();
+      } else {
+        updateSyncHeaderBtn();
+      }
+    } catch (_) {
+      ui.syncStatus = 'err';
+      if (!silent) ui.syncMsg = 'Sync error — check key or connection.';
+      if (!silent || ui.showSyncDrawer) renderApp();
+      else updateSyncHeaderBtn();
+    } finally {
+      syncInFlight = false;
+    }
+  }
+
+  async function setupCloudSync(rawInput) {
+    const trimmed = (rawInput || '').trim();
+    if (!trimmed || !SESSION_PASS) return;
+
+    ui.syncStatus = 'syncing';
+    ui.syncMsg = 'Connecting encrypted sync...';
+    renderApp();
+
+    try {
+      let pairCode = null;
+      if (trimmed.includes('#pair=')) {
+        const hashPart = trimmed.split('#')[1] || '';
+        pairCode = new URLSearchParams(hashPart).get('pair');
+      } else if (trimmed.startsWith('PAIR1:')) {
+        pairCode = trimmed.slice(6).trim();
+      }
+
+      if (pairCode) {
+        const encObj = JSON.parse(fromUrlCode(pairCode));
+        const decoded = await decryptJsonWithPasscode(encObj, SESSION_PASS);
+        if (!decoded || !decoded.t || !decoded.g) throw new Error('Bad pairing code');
+        syncCfg = { token: decoded.t, gistId: decoded.g };
+        await saveSyncCfgEncrypted(syncCfg);
+        ui.syncMsg = '✓ Device paired & synced!';
+        await syncWithCloud({ silent: false, isInitial: true });
+        return;
+      }
+
+      const token = trimmed;
+      const listRes = await fetch('https://api.github.com/gists?per_page=50', {
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!listRes.ok) throw new Error('Invalid token');
+      const gists = await listRes.json();
+      const existing = Array.isArray(gists)
+        ? gists.find(g => g && g.files && g.files[SYNC_FILENAME])
+        : null;
+
+      let gistId = existing ? existing.id : null;
+      if (!gistId) {
+        const encInit = await encryptWithPasscode(progress, SESSION_PASS, 100000);
+        const createRes = await fetch('https://api.github.com/gists', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/vnd.github+json',
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            description: 'Cadence encrypted workspace sync',
+            public: false,
+            files: {
+              [SYNC_FILENAME]: { content: JSON.stringify(encInit) }
+            }
+          })
+        });
+        if (!createRes.ok) throw new Error('Could not create gist');
+        const created = await createRes.json();
+        gistId = created.id;
+      }
+
+      syncCfg = { token, gistId };
+      await saveSyncCfgEncrypted(syncCfg);
+      ui.syncMsg = '✓ Auto-Sync active! Copy your Pairing Link below to connect other devices in 1 tap.';
+      await syncWithCloud({ silent: false, isInitial: true });
+    } catch (_) {
+      ui.syncStatus = 'err';
+      ui.syncMsg = 'Could not connect — ensure your GitHub key has the "gist" scope.';
+      renderApp();
+    }
+  }
+
+  async function initSyncAfterUnlock() {
+    if (!SESSION_PASS) return;
+    if (pendingPairCode) {
+      const code = pendingPairCode;
+      pendingPairCode = null;
+      ui.showSyncDrawer = true;
+      await setupCloudSync('PAIR1:' + code);
+      return;
+    }
+    syncCfg = await loadSyncCfgDecrypted();
+    if (syncCfg) {
+      updateSyncHeaderBtn();
+      syncWithCloud({ silent: true, isInitial: true });
+    }
   }
 
   function jumpToResumeTarget() {
@@ -294,6 +692,9 @@
 
   function renderLock(errMsg = '') {
     const root = document.getElementById('root');
+    const pairBanner = pendingPairCode
+      ? `<div style="background:var(--surface-2);border:1px solid var(--primary);border-radius:12px;padding:10px 12px;font-size:13.5px;color:var(--text);">🔗 <strong>Pairing link detected.</strong> Enter your access key to unlock and link cross-device sync automatically.</div>`
+      : '';
     root.innerHTML = `
       <div class="lock-wrap">
         <div class="lock-card">
@@ -304,11 +705,12 @@
               <div style="font-size:14.5px;color:var(--muted);margin-top:3px;">Enter your private access key to unlock your personal workspace.</div>
             </div>
           </div>
+          ${pairBanner}
           <form id="unlock-form" style="display:flex;flex-direction:column;gap:14px;">
             <input id="pass-input" type="password" class="text-input" placeholder="Access key" autocomplete="current-password" required />
             <label style="display:flex;align-items:center;gap:10px;font-size:15px;color:var(--muted);">
               <input id="remember-chk" type="checkbox" checked style="width:18px;height:18px;" />
-              Remember on this phone
+              Remember on this device
             </label>
             ${errMsg ? `<div style="color:var(--danger);font-size:14px;font-weight:600;">${errMsg}</div>` : ''}
             <button id="unlock-btn" type="submit" class="primary-btn">Unlock Cadence</button>
@@ -329,7 +731,8 @@
         jumpToResumeTarget();
         ui.didInitialResume = true;
         startQuizTimerIfNeeded();
-        renderApp(true);
+        renderApp();
+        initSyncAfterUnlock();
       } catch (_) {
         renderLock('Invalid access key. Please check and try again.');
       }
@@ -382,11 +785,15 @@
   }
 
   function lockNow() {
-    saveProgress();
+    saveProgress(false);
     localStorage.removeItem(LS_KEY);
     DATA = null;
+    SESSION_PASS = null;
+    syncCfg = null;
     ui.showTimeDrawer = false;
+    ui.showSyncDrawer = false;
     ui.picker = null;
+    clearTimeout(syncPushTimer);
     clearInterval(ui.timerHandle);
     renderLock();
   }
@@ -606,6 +1013,97 @@
     return '';
   }
 
+  function renderSyncDrawer() {
+    if (!ui.showSyncDrawer) return '';
+
+    const lastTimeStr = ui.lastSyncedAt
+      ? new Date(ui.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : 'Ready';
+
+    const msgBanner = ui.syncMsg
+      ? `<div style="background:var(--surface-2);border:1px solid ${ui.syncStatus === 'err' ? 'var(--danger)' : 'var(--primary)'};border-radius:12px;padding:10px 12px;font-size:13.5px;line-height:1.4;color:${ui.syncStatus === 'err' ? 'var(--danger)' : 'var(--text)'};">${ui.syncMsg}</div>`
+      : '';
+
+    const autoSyncHtml = syncCfg
+      ? `
+        <div class="day-log-row" style="gap:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span style="font-size:14.5px;font-weight:800;color:var(--success);">🟢 Auto-Sync Active</span>
+            <span style="font-size:12.5px;font-weight:600;color:var(--muted);">${ui.syncStatus === 'syncing' ? 'Syncing...' : `Synced • ${lastTimeStr}`}</span>
+          </div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.4;">
+            Cards, saved items, practice answers, checklist days, and daily streaks merge automatically across your devices.
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <button class="primary-btn" id="sync-now-btn" style="padding:11px 10px;font-size:14px;" ${ui.syncStatus === 'syncing' ? 'disabled' : ''}>
+              ${ui.syncStatus === 'syncing' ? 'Syncing...' : '↻ Sync Now'}
+            </button>
+            <button class="sec-btn" id="copy-pair-btn" style="padding:11px 10px;font-size:14px;">
+              🔗 Pairing Link
+            </button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:2px;">
+            <span style="font-size:12px;color:var(--muted);">Open Pairing Link on another device for 1-tap setup.</span>
+            <button class="icon-btn" id="sync-disconnect-btn" style="padding:5px 9px;font-size:12px;color:var(--danger);border-color:rgba(239,68,68,0.4);">Disconnect</button>
+          </div>
+        </div>
+      `
+      : `
+        <div class="day-log-row" style="gap:10px;">
+          <div style="font-size:14.5px;font-weight:800;">☁ Automatic Cross-Device Sync</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.42;">
+            One-time 20-second setup using a private, encrypted GitHub Gist on your own account:
+          </div>
+          <a href="https://github.com/settings/tokens/new?scopes=gist&description=Cadence+Sync" target="_blank" rel="noopener noreferrer" class="sec-btn" style="display:block;text-align:center;text-decoration:none;padding:11px 12px;font-size:14px;">
+            1. Create Free Gist Key on GitHub ↗
+          </a>
+          <div style="font-size:12px;color:var(--muted);line-height:1.35;">
+            On GitHub, scroll down &amp; tap <strong>Generate token</strong>, then paste the <code>ghp_...</code> key (or a Pairing Link from another device) below:
+          </div>
+          <input id="sync-key-input" type="password" class="text-input" placeholder="Paste ghp_... key or Pairing Link" style="padding:11px 13px;font-size:14.5px;border-radius:12px;" autocomplete="off" />
+          <button class="primary-btn" id="sync-connect-btn" style="padding:12px;font-size:15px;" ${ui.syncStatus === 'syncing' ? 'disabled' : ''}>
+            ${ui.syncStatus === 'syncing' ? 'Connecting...' : '2. Enable Auto-Sync'}
+          </button>
+        </div>
+      `;
+
+    const pasteBoxHtml = ui.showPasteBox
+      ? `
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+          <input id="manual-sync-input" type="text" class="text-input" placeholder="Paste SYNC1:... code here" style="padding:10px 12px;font-size:14px;border-radius:11px;" autocomplete="off" />
+          <button class="success-btn" id="apply-manual-sync-btn" style="padding:11px;font-size:14.5px;">Merge Imported Progress</button>
+        </div>
+      `
+      : '';
+
+    return `
+      <div class="drawer-backdrop" id="sync-drawer-backdrop">
+        <div class="drawer-sheet" role="dialog" aria-label="Cross-Device Sync">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div style="font-size:18px;font-weight:800;">☁ Cross-Device Sync</div>
+            <button class="icon-btn" id="sync-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+          </div>
+
+          ${msgBanner}
+          ${autoSyncHtml}
+
+          <div class="day-log-row" style="gap:9px;">
+            <div style="font-size:13.5px;font-weight:800;color:var(--muted);">INSTANT TRANSFER (NO KEY NEEDED)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <button class="sec-btn" id="copy-manual-sync-btn" style="padding:10px;font-size:13.5px;">📤 Copy Sync Code</button>
+              <button class="sec-btn" id="toggle-paste-sync-btn" style="padding:10px;font-size:13.5px;">📥 Paste Sync Code</button>
+            </div>
+            ${pasteBoxHtml}
+          </div>
+
+          <div style="font-size:12px;color:var(--muted);line-height:1.4;">
+            🔒 End-to-end encrypted locally with AES-256-GCM using your access key before leaving this device.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderApp() {
     if (!DATA) return renderLock();
     const root = document.getElementById('root');
@@ -622,19 +1120,20 @@
     root.innerHTML = `
       <div class="app-shell">
         <header class="topbar">
-          <div style="display:flex;align-items:center;gap:10px;">
+          <div style="display:flex;align-items:center;gap:9px;min-width:0;">
             <img src="icon-192.png?v=7" alt="" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;" />
-            <div>
+            <div style="min-width:0;">
               <div class="brand-title">${DATA.appTitle}</div>
               <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:7px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
             <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily log">
               <span id="streak-count-label">🔥 ${stats.streak}d</span>
             </button>
-            <button class="icon-btn" id="theme-btn" aria-label="Toggle theme">☀/☾</button>
-            <button class="icon-btn" id="lock-btn" aria-label="Lock">🔒</button>
+            <button class="icon-btn" id="sync-open-btn" title="Cross-device sync" style="${syncBtnStyle()}">${syncBtnLabel()}</button>
+            <button class="icon-btn" id="theme-btn" aria-label="Toggle theme" style="padding:7px 9px;">◐</button>
+            <button class="icon-btn" id="lock-btn" aria-label="Lock" style="padding:7px 9px;">🔒</button>
           </div>
         </header>
 
@@ -664,6 +1163,7 @@
         </nav>
 
         ${renderTimeDrawer(stats)}
+        ${renderSyncDrawer()}
         ${renderPickerDrawer()}
       </div>
     `;
@@ -921,7 +1421,7 @@
       progress.doneCards[cur.id] = true;
       recordStudyAction(1);
     } else {
-      saveProgress();
+      saveProgress(false);
     }
 
     if (ui.cardIdx < cards.length - 1) {
@@ -939,8 +1439,9 @@
     document.getElementById('lock-btn')?.addEventListener('click', lockNow);
 
     const openDrawer = () => {
-      saveProgress();
+      saveProgress(false);
       ui.picker = null;
+      ui.showSyncDrawer = false;
       ui.showTimeDrawer = true;
       renderApp();
     };
@@ -954,6 +1455,111 @@
     document.getElementById('time-drawer-backdrop')?.addEventListener('click', e => {
       if (e.target.id === 'time-drawer-backdrop') {
         ui.showTimeDrawer = false;
+        renderApp();
+      }
+    });
+
+    // Cross-Device Sync Drawer handlers
+    document.getElementById('sync-open-btn')?.addEventListener('click', () => {
+      saveProgress(false);
+      ui.picker = null;
+      ui.showTimeDrawer = false;
+      ui.syncMsg = '';
+      ui.showSyncDrawer = true;
+      renderApp();
+    });
+
+    document.getElementById('sync-close-btn')?.addEventListener('click', () => {
+      ui.showSyncDrawer = false;
+      ui.showPasteBox = false;
+      renderApp();
+    });
+
+    document.getElementById('sync-drawer-backdrop')?.addEventListener('click', e => {
+      if (e.target.id === 'sync-drawer-backdrop') {
+        ui.showSyncDrawer = false;
+        ui.showPasteBox = false;
+        renderApp();
+      }
+    });
+
+    document.getElementById('sync-connect-btn')?.addEventListener('click', () => {
+      const inp = document.getElementById('sync-key-input');
+      if (inp && inp.value.trim()) {
+        setupCloudSync(inp.value.trim());
+      }
+    });
+
+    document.getElementById('sync-now-btn')?.addEventListener('click', () => {
+      ui.syncMsg = '';
+      syncWithCloud({ silent: false });
+    });
+
+    document.getElementById('copy-pair-btn')?.addEventListener('click', async () => {
+      if (!syncCfg || !SESSION_PASS) return;
+      try {
+        const encPair = await encryptWithPasscode({ t: syncCfg.token, g: syncCfg.gistId }, SESSION_PASS, 100000);
+        const code = toUrlCode(JSON.stringify(encPair));
+        const link = `${window.location.origin}${window.location.pathname}#pair=${code}`;
+        await navigator.clipboard.writeText(link);
+        ui.syncMsg = '✓ Pairing Link copied! Open it on your other device for 1-tap encrypted sync.';
+        renderApp();
+      } catch (_) {
+        ui.syncMsg = 'Could not copy automatically — check clipboard permissions.';
+        renderApp();
+      }
+    });
+
+    document.getElementById('sync-disconnect-btn')?.addEventListener('click', () => {
+      syncCfg = null;
+      localStorage.removeItem(LS_SYNC);
+      ui.syncStatus = 'idle';
+      ui.syncMsg = 'Disconnected auto-sync on this device.';
+      renderApp();
+    });
+
+    document.getElementById('copy-manual-sync-btn')?.addEventListener('click', async () => {
+      if (!SESSION_PASS) return;
+      try {
+        const encSnap = await encryptWithPasscode(progress, SESSION_PASS, 100000);
+        const snapCode = 'SYNC1:' + toUrlCode(JSON.stringify(encSnap));
+        await navigator.clipboard.writeText(snapCode);
+        ui.syncMsg = '✓ Encrypted Sync Code copied! Tap "Paste Sync Code" on your other device.';
+        renderApp();
+      } catch (_) {
+        ui.syncMsg = 'Could not copy Sync Code to clipboard.';
+        renderApp();
+      }
+    });
+
+    document.getElementById('toggle-paste-sync-btn')?.addEventListener('click', () => {
+      ui.showPasteBox = !ui.showPasteBox;
+      ui.syncMsg = '';
+      renderApp();
+    });
+
+    document.getElementById('apply-manual-sync-btn')?.addEventListener('click', async () => {
+      const inp = document.getElementById('manual-sync-input');
+      const raw = (inp ? inp.value : '').trim();
+      if (!raw || !SESSION_PASS) return;
+      if (raw.includes('#pair=') || raw.startsWith('PAIR1:')) {
+        await setupCloudSync(raw);
+        return;
+      }
+      try {
+        const clean = raw.startsWith('SYNC1:') ? raw.slice(6).trim() : raw;
+        const encObj = JSON.parse(fromUrlCode(clean));
+        const remoteProg = await decryptJsonWithPasscode(encObj, SESSION_PASS);
+        progress = mergeProgress(progress, remoteProg);
+        saveProgress(true);
+        jumpToResumeTarget();
+        ui.showPasteBox = false;
+        ui.syncStatus = 'ok';
+        ui.syncMsg = '✓ Progress merged across devices!';
+        renderApp();
+      } catch (_) {
+        ui.syncStatus = 'err';
+        ui.syncMsg = 'Invalid Sync Code — copy a fresh code from your other device.';
         renderApp();
       }
     });
@@ -1027,7 +1633,7 @@
         }
       });
       if (newlyDone > 0) recordStudyAction(newlyDone);
-      else saveProgress();
+      else saveProgress(true);
       ui.picker = null;
       renderApp();
     });
@@ -1071,8 +1677,10 @@
         const cards = getActiveCards();
         const cur = cards[ui.cardIdx];
         if (!cur) return;
-        progress.flaggedCards[cur.id] = !progress.flaggedCards[cur.id];
-        saveProgress();
+        if (progress.flaggedCards[cur.id]) delete progress.flaggedCards[cur.id];
+        else progress.flaggedCards[cur.id] = true;
+        progress.cardMeta[cur.id] = Date.now();
+        saveProgress(true);
         renderApp();
       });
 
@@ -1131,6 +1739,7 @@
           progress.answers[cur.id] = picked;
           if (picked !== cur.ans) progress.missedQs[cur.id] = true;
           else delete progress.missedQs[cur.id];
+          progress.qMeta[cur.id] = Date.now();
           recordStudyAction(1);
           clearInterval(ui.timerHandle);
           renderApp();
@@ -1146,7 +1755,8 @@
         const cur = qs[ui.qIdx];
         if (!cur) return;
         delete progress.answers[cur.id];
-        saveProgress();
+        progress.qMeta[cur.id] = Date.now();
+        saveProgress(true);
         ui.secLeft = 120;
         startQuizTimerIfNeeded();
         renderApp();
@@ -1176,9 +1786,11 @@
       document.querySelectorAll('[data-day]').forEach(el => {
         el.addEventListener('click', () => {
           const d = el.dataset.day;
-          progress.doneDays[d] = !progress.doneDays[d];
+          if (progress.doneDays[d]) delete progress.doneDays[d];
+          else progress.doneDays[d] = true;
+          progress.dayMeta[d] = Date.now();
           if (progress.doneDays[d]) recordStudyAction(1);
-          else saveProgress();
+          else saveProgress(true);
           renderApp();
         });
       });
@@ -1205,8 +1817,8 @@
   }, { passive: true });
 
   document.addEventListener('touchend', e => {
-    if (!DATA || ui.showTimeDrawer || ui.picker) return;
-    if (e.target.tagName === 'INPUT') return;
+    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.picker) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     const dx = e.changedTouches[0].screenX - sx;
     const dy = e.changedTouches[0].screenY - sy;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -1222,7 +1834,7 @@
     }
   }, { passive: true });
 
-  // Auto-unlock if saved on phone
+  // Auto-unlock if saved on device
   (async () => {
     const saved = localStorage.getItem(LS_KEY);
     if (saved) {
@@ -1231,7 +1843,8 @@
         jumpToResumeTarget();
         ui.didInitialResume = true;
         startQuizTimerIfNeeded();
-        renderApp(true);
+        renderApp();
+        initSyncAfterUnlock();
         return;
       } catch (_) {
         localStorage.removeItem(LS_KEY);
