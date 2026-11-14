@@ -701,4 +701,27 @@ html, body {
   background: var(--primary);
 }
 
+.ptr-indicator {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translate(-50%, -70px);
+  z-index: 120;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+  opacity: 0;
+  white-space: nowrap;
+}
 
+.ptr-indicator.ready {
+  border-color: var(--success);
+  color: var(--success);
+}

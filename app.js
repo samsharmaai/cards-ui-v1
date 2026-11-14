@@ -53,9 +53,27 @@
     document.body.classList.add('light');
   }
 
+  let swReg = null;
+  let swReloading = false;
   if ('serviceWorker' in navigator) {
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) {
+        hadController = true;
+        return;
+      }
+      if (swReloading) return;
+      swReloading = true;
+      try { if (DATA) saveProgress(false); } catch (_) {}
+      window.location.reload();
+    });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').then(reg => reg.update()).catch(() => {});
+      navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+        .then(reg => {
+          swReg = reg;
+          reg.update().catch(() => {});
+        })
+        .catch(() => {});
     });
   }
 
@@ -280,6 +298,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       lastActiveAt = Date.now();
+      if (swReg) swReg.update().catch(() => {});
       if (DATA && syncCfg && (Date.now() - lastSyncPullAt > 15000)) {
         syncWithCloud({ silent: true });
       }
@@ -1133,12 +1152,36 @@
             ${pasteBoxHtml}
           </div>
 
+          <button class="sec-btn" id="hard-refresh-btn" style="padding:10px;font-size:13.5px;width:100%;">↻ Check for App Update / Refresh</button>
+
           <div style="font-size:12px;color:var(--muted);line-height:1.4;">
             🔒 End-to-end encrypted locally with AES-256-GCM using your access key before leaving this device.
           </div>
         </div>
       </div>
     `;
+  }
+
+  async function forceAppRefresh() {
+    if (swReloading) return;
+    try {
+      if (DATA) saveProgress(false);
+      if (DATA && syncCfg && SESSION_PASS && navigator.onLine !== false) {
+        await Promise.race([
+          syncWithCloud({ silent: true }),
+          new Promise(res => setTimeout(res, 2500))
+        ]);
+      }
+      if (navigator.onLine !== false && 'caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if (swReg) {
+        await swReg.update().catch(() => {});
+      }
+    } catch (_) {}
+    swReloading = true;
+    window.location.reload();
   }
 
   function renderApp() {
@@ -1581,6 +1624,8 @@
       syncWithCloud({ silent: false });
     });
 
+    document.getElementById('hard-refresh-btn')?.addEventListener('click', forceAppRefresh);
+
     document.getElementById('copy-pair-btn')?.addEventListener('click', async () => {
       if (!syncCfg || !SESSION_PASS) return;
       try {
@@ -1964,14 +2009,118 @@
     }
   }
 
-  // Horizontal swipe navigation
+  // Pull-down-to-refresh (standalone PWA) + Horizontal swipe navigation
   let sx = 0, sy = 0;
+  let ptrPossible = false, ptrScroller = null, ptrStartX = 0, ptrStartY = 0, ptrDist = 0;
+
+  function getPtrIndicator() {
+    let el = document.getElementById('ptr-indicator');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ptr-indicator';
+      el.className = 'ptr-indicator';
+      el.textContent = '↓ Pull down to refresh';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function resetPtrIndicator() {
+    const el = document.getElementById('ptr-indicator');
+    if (!el) return;
+    el.style.opacity = '0';
+    el.style.transform = 'translate(-50%, -70px)';
+    el.classList.remove('ready');
+  }
+
   document.addEventListener('touchstart', e => {
     sx = e.changedTouches[0].screenX;
     sy = e.changedTouches[0].screenY;
+
+    if (
+      !swReloading &&
+      !ui.showTimeDrawer &&
+      !ui.showSyncDrawer &&
+      !ui.picker &&
+      e.touches.length === 1 &&
+      e.target.tagName !== 'INPUT' &&
+      e.target.tagName !== 'TEXTAREA' &&
+      e.touches[0].clientY < window.innerHeight * 0.55
+    ) {
+      const scroller = e.target.closest
+        ? e.target.closest('.scroll-pane, .flashcard, .quiz-card, .lock-wrap')
+        : null;
+      if (!scroller || scroller.scrollTop <= 2) {
+        ptrPossible = true;
+        ptrScroller = scroller;
+        ptrStartX = e.touches[0].clientX;
+        ptrStartY = e.touches[0].clientY;
+        ptrDist = 0;
+        return;
+      }
+    }
+    ptrPossible = false;
+    ptrDist = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!ptrPossible || swReloading || !e.touches.length) return;
+    if (ptrScroller && ptrScroller.scrollTop > 2) {
+      ptrPossible = false;
+      ptrDist = 0;
+      resetPtrIndicator();
+      return;
+    }
+    const dx = e.touches[0].clientX - ptrStartX;
+    const dy = e.touches[0].clientY - ptrStartY;
+    if (dy < -6 || Math.abs(dx) > Math.abs(dy)) {
+      ptrPossible = false;
+      ptrDist = 0;
+      resetPtrIndicator();
+      return;
+    }
+    if (dy > 22 && dy > Math.abs(dx) * 1.6) {
+      ptrDist = dy;
+      const el = getPtrIndicator();
+      const offset = Math.min((dy - 22) * 0.5, 48);
+      el.style.opacity = String(Math.min(1, (dy - 22) / 45));
+      el.style.transform = `translate(-50%, ${offset}px)`;
+      if (dy >= 88) {
+        el.textContent = '↻ Release to update';
+        el.classList.add('ready');
+      } else {
+        el.textContent = '↓ Pull down to refresh';
+        el.classList.remove('ready');
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', () => {
+    if (ptrPossible || ptrDist > 0) {
+      ptrPossible = false;
+      ptrDist = 0;
+      resetPtrIndicator();
+    }
   }, { passive: true });
 
   document.addEventListener('touchend', e => {
+    if (ptrPossible && ptrDist >= 88) {
+      ptrPossible = false;
+      ptrDist = 0;
+      const el = getPtrIndicator();
+      el.style.opacity = '1';
+      el.style.transform = 'translate(-50%, 14px)';
+      el.textContent = '↻ Updating...';
+      el.classList.add('ready');
+      forceAppRefresh();
+      return;
+    }
+    if (ptrPossible || ptrDist > 0) {
+      ptrPossible = false;
+      ptrDist = 0;
+      resetPtrIndicator();
+    }
+
     if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.picker) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     const dx = e.changedTouches[0].screenX - sx;
