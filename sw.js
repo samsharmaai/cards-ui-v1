@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pocket-deck-v4';
+const CACHE_NAME = 'cadence-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -6,8 +6,8 @@ const ASSETS = [
   './app.js',
   './vault.json',
   './manifest.webmanifest',
-  './icon-192.png',
-  './icon-512.png'
+  './icon-192.png?v=5',
+  './icon-512.png?v=5'
 ];
 
 self.addEventListener('install', event => {

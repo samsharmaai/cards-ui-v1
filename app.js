@@ -22,8 +22,7 @@
     secLeft: 120,
     timerHandle: null,
     didInitialResume: false,
-    showTimeDrawer: false,
-    studyPaused: false
+    showTimeDrawer: false
   };
 
   if (localStorage.getItem(LS_THEME) === 'light') {
@@ -43,27 +42,14 @@
     return `${y}-${m}-${day}`;
   }
 
-  function formatShortDuration(sec) {
+  function formatCalmMinutes(sec) {
     const s = Math.max(0, Math.floor(sec || 0));
     if (s === 0) return '0m';
-    if (s < 60) return `${s}s`;
+    if (s < 60) return '< 1m';
     if (s < 3600) return `${Math.floor(s / 60)}m`;
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
-    return `${h}h ${String(m).padStart(2, '0')}m`;
-  }
-
-  function formatDetailDuration(sec) {
-    const s = Math.max(0, Math.floor(sec || 0));
-    if (s < 60) return `${s}s`;
-    if (s < 3600) {
-      const m = Math.floor(s / 60);
-      const rem = s % 60;
-      return rem > 0 ? `${m}m ${String(rem).padStart(2, '0')}s` : `${m}m`;
-    }
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    return `${h}h ${String(m).padStart(2, '0')}m`;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
   }
 
   function formatDateHeading(dk, todayKey, yestKey) {
@@ -189,19 +175,11 @@
     if (unsavedSecTicks > 0) saveProgress();
   });
 
+  // Silent background study-time tracker (never renders ticking seconds)
   setInterval(() => {
     if (!DATA) return;
-    const isVisible = document.visibilityState === 'visible';
-    const isIdle = (Date.now() - lastActiveAt) >= IDLE_LIMIT_MS;
-
-    const statusEl = document.getElementById('drawer-timer-status');
-    if (statusEl) {
-      if (ui.studyPaused) statusEl.textContent = '⏸ Timer paused manually';
-      else if (!isVisible || isIdle) statusEl.textContent = '💤 Auto-paused (idle — tap anywhere to resume)';
-      else statusEl.textContent = '● Tracking active time in app (auto-pauses when idle or screen off)';
-    }
-
-    if (ui.studyPaused || !isVisible || isIdle) return;
+    if (document.visibilityState !== 'visible') return;
+    if ((Date.now() - lastActiveAt) >= IDLE_LIMIT_MS) return;
 
     const tk = localDateKey();
     const wasLit = isDayActive(tk);
@@ -211,9 +189,6 @@
 
     const nowLit = isDayActive(tk);
     const todaySecs = progress.dailySeconds[tk];
-
-    const chipTimeEl = document.getElementById('streak-time-label');
-    if (chipTimeEl) chipTimeEl.textContent = formatShortDuration(todaySecs);
 
     if (!wasLit && nowLit) {
       const stats = computeStreakStats();
@@ -229,15 +204,15 @@
       saveProgress();
     }
 
-    if (ui.showTimeDrawer) {
+    if (ui.showTimeDrawer && todaySecs % 60 === 0) {
       const totalSecs = Object.values(progress.dailySeconds).reduce((s, v) => s + (v || 0), 0);
       const dToday = document.getElementById('drawer-today-time');
       const dTotal = document.getElementById('drawer-total-time');
       const rTime = document.getElementById('today-row-time');
       const rBar = document.getElementById('today-row-bar');
-      if (dToday) dToday.textContent = formatDetailDuration(todaySecs);
-      if (dTotal) dTotal.textContent = formatDetailDuration(totalSecs);
-      if (rTime) rTime.textContent = formatDetailDuration(todaySecs);
+      if (dToday) dToday.textContent = formatCalmMinutes(todaySecs);
+      if (dTotal) dTotal.textContent = formatCalmMinutes(totalSecs);
+      if (rTime) rTime.textContent = formatCalmMinutes(todaySecs);
       if (rBar) rBar.style.width = `${Math.min(100, Math.round((todaySecs / 3600) * 100))}%`;
     }
   }, 1000);
@@ -321,9 +296,12 @@
     root.innerHTML = `
       <div class="lock-wrap">
         <div class="lock-card">
-          <div>
-            <div style="font-size:24px;font-weight:800;">Pocket Deck</div>
-            <div style="font-size:15px;color:var(--muted);margin-top:6px;">Enter your private access key to decrypt local deck data.</div>
+          <div style="display:flex;align-items:center;gap:13px;">
+            <img src="icon-192.png?v=5" alt="Cadence" style="width:52px;height:52px;border-radius:14px;border:1px solid var(--border);flex-shrink:0;" />
+            <div>
+              <div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;">Cadence</div>
+              <div style="font-size:14.5px;color:var(--muted);margin-top:3px;">Enter your private access key to unlock your personal workspace.</div>
+            </div>
           </div>
           <form id="unlock-form" style="display:flex;flex-direction:column;gap:14px;">
             <input id="pass-input" type="password" class="text-input" placeholder="Access key" autocomplete="current-password" required />
@@ -332,7 +310,7 @@
               Remember on this phone
             </label>
             ${errMsg ? `<div style="color:var(--danger);font-size:14px;font-weight:600;">${errMsg}</div>` : ''}
-            <button id="unlock-btn" type="submit" class="primary-btn">Unlock Deck</button>
+            <button id="unlock-btn" type="submit" class="primary-btn">Unlock Cadence</button>
           </form>
         </div>
       </div>
@@ -422,7 +400,7 @@
     `).join('');
 
     return `
-      <div class="streak-banner" id="streak-banner-btn" title="Tap for daily time breakdown">
+      <div class="streak-banner" id="streak-banner-btn" title="Tap for daily log">
         <div class="week-dots">${weekHtml}</div>
       </div>
     `;
@@ -460,7 +438,7 @@
               ${formatDateHeading(dk, todayKey, yestKey)}
             </span>
             <span style="font-size:13.5px;font-weight:700;">
-              <span ${isToday ? 'id="today-row-time"' : ''}>${formatDetailDuration(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
+              <span ${isToday ? 'id="today-row-time"' : ''}>${formatCalmMinutes(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
             </span>
           </div>
           <div class="day-log-bar-track">
@@ -470,44 +448,35 @@
       `;
     }).join('');
 
-    const statusMsg = ui.studyPaused
-      ? '⏸ Timer paused manually'
-      : '● Tracking active time in app (auto-pauses when idle or screen off)';
-
     return `
       <div class="drawer-backdrop" id="time-drawer-backdrop">
-        <div class="drawer-sheet" role="dialog" aria-label="Daily Study Time">
+        <div class="drawer-sheet" role="dialog" aria-label="Daily Study Log">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <div style="font-size:18px;font-weight:800;">🔥 Daily Streak & Time</div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <button class="icon-btn" id="drawer-pause-btn" style="padding:7px 11px;font-size:13px;">
-                ${ui.studyPaused ? '▶ Resume' : '⏸ Pause'}
-              </button>
-              <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
-            </div>
+            <div style="font-size:18px;font-weight:800;">🔥 Daily Streak & Log</div>
+            <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
           </div>
 
           <div class="drawer-stat-grid">
             <div class="drawer-stat-box">
               <span class="drawer-stat-label">TODAY</span>
-              <span class="drawer-stat-val" id="drawer-today-time" style="color:var(--primary);">${formatDetailDuration(stats.todaySecs)}</span>
+              <span class="drawer-stat-val" id="drawer-today-time" style="color:var(--primary);">${formatCalmMinutes(stats.todaySecs)}</span>
             </div>
             <div class="drawer-stat-box">
               <span class="drawer-stat-label">STREAK</span>
               <span class="drawer-stat-val" style="color:var(--warn);">🔥 ${stats.streak}d</span>
             </div>
             <div class="drawer-stat-box">
-              <span class="drawer-stat-label">TOTAL IN-APP</span>
-              <span class="drawer-stat-val" id="drawer-total-time">${formatDetailDuration(stats.totalSecs)}</span>
+              <span class="drawer-stat-label">TOTAL</span>
+              <span class="drawer-stat-val" id="drawer-total-time">${formatCalmMinutes(stats.totalSecs)}</span>
             </div>
           </div>
 
-          <div id="drawer-timer-status" style="font-size:12.5px;color:var(--muted);">
-            ${statusMsg}
+          <div style="font-size:12.5px;color:var(--muted);">
+            Quietly logged in the background while you study.
           </div>
 
           <div style="font-size:13px;font-weight:800;color:var(--muted);margin-top:2px;">
-            BY DAY (60M BAR SCALE)
+            BY DAY
           </div>
 
           <div class="day-log-list">
@@ -534,15 +503,16 @@
     root.innerHTML = `
       <div class="app-shell">
         <header class="topbar">
-          <div>
-            <div class="brand-title">${DATA.appTitle}</div>
-            <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <img src="icon-192.png?v=5" alt="" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;" />
+            <div>
+              <div class="brand-title">${DATA.appTitle}</div>
+              <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
+            </div>
           </div>
           <div style="display:flex;align-items:center;gap:7px;">
-            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily study log">
+            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily log">
               <span id="streak-count-label">🔥 ${stats.streak}d</span>
-              <span style="opacity:0.55;">•</span>
-              <span id="streak-time-label">${formatShortDuration(stats.todaySecs)}</span>
             </button>
             <button class="icon-btn" id="theme-btn" aria-label="Toggle theme">☀/☾</button>
             <button class="icon-btn" id="lock-btn" aria-label="Lock">🔒</button>
@@ -900,13 +870,6 @@
         ui.showTimeDrawer = false;
         renderApp();
       }
-    });
-
-    document.getElementById('drawer-pause-btn')?.addEventListener('click', () => {
-      ui.studyPaused = !ui.studyPaused;
-      lastActiveAt = Date.now();
-      saveProgress();
-      renderApp();
     });
 
     document.querySelectorAll('.nav-tab').forEach(btn => {
