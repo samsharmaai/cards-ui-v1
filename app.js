@@ -2,10 +2,12 @@
   const LS_KEY = 'pd_saved_pass_v1';
   const LS_STATE = 'pd_progress_v1';
   const LS_THEME = 'pd_theme_v1';
-  const DAILY_GOAL = 10;
+  const IDLE_LIMIT_MS = 90000;
 
   let DATA = null;
   let progress = loadProgress();
+  let lastActiveAt = Date.now();
+  let unsavedSecTicks = 0;
 
   let ui = {
     tab: 'cards',
@@ -19,7 +21,9 @@
     timerOn: true,
     secLeft: 120,
     timerHandle: null,
-    didInitialResume: false
+    didInitialResume: false,
+    showTimeDrawer: false,
+    studyPaused: false
   };
 
   if (localStorage.getItem(LS_THEME) === 'light') {
@@ -39,6 +43,38 @@
     return `${y}-${m}-${day}`;
   }
 
+  function formatShortDuration(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    if (s === 0) return '0m';
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h}h ${String(m).padStart(2, '0')}m`;
+  }
+
+  function formatDetailDuration(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) {
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return rem > 0 ? `${m}m ${String(rem).padStart(2, '0')}s` : `${m}m`;
+    }
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h}h ${String(m).padStart(2, '0')}m`;
+  }
+
+  function formatDateHeading(dk, todayKey, yestKey) {
+    const parts = dk.split('-').map(Number);
+    const dt = new Date(parts[0], (parts[1] || 1) - 1, parts[2] || 1);
+    const label = dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    if (dk === todayKey) return `Today • ${label}`;
+    if (dk === yestKey) return `Yesterday • ${label}`;
+    return label;
+  }
+
   function loadProgress() {
     const defaults = {
       flaggedCards: {},
@@ -47,6 +83,7 @@
       missedQs: {},
       doneDays: {},
       dailyActivity: {},
+      dailySeconds: {},
       lastDeckIdx: 0,
       lastCardIdx: 0
     };
@@ -62,7 +99,8 @@
           answers: parsed.answers || {},
           missedQs: parsed.missedQs || {},
           doneDays: parsed.doneDays || {},
-          dailyActivity: parsed.dailyActivity || {}
+          dailyActivity: parsed.dailyActivity || {},
+          dailySeconds: parsed.dailySeconds || {}
         };
       }
     } catch (_) {}
@@ -72,31 +110,43 @@
   function saveProgress() {
     try {
       localStorage.setItem(LS_STATE, JSON.stringify(progress));
+      unsavedSecTicks = 0;
     } catch (_) {}
   }
 
   function recordStudyAction(amount = 1) {
     const k = localDateKey();
     progress.dailyActivity[k] = (progress.dailyActivity[k] || 0) + amount;
+    lastActiveAt = Date.now();
     saveProgress();
+  }
+
+  function isDayActive(dk) {
+    const reps = (progress.dailyActivity && progress.dailyActivity[dk]) || 0;
+    const secs = (progress.dailySeconds && progress.dailySeconds[dk]) || 0;
+    return reps > 0 || secs >= 60;
   }
 
   function computeStreakStats() {
     const act = progress.dailyActivity || {};
+    const secs = progress.dailySeconds || {};
     const today = new Date();
     const todayKey = localDateKey(today);
     const todayReps = act[todayKey] || 0;
+    const todaySecs = secs[todayKey] || 0;
+    const totalSecs = Object.values(secs).reduce((sum, v) => sum + (v || 0), 0);
+    const studiedToday = isDayActive(todayKey);
 
     let streak = 0;
     let cursor = new Date(today);
-    if ((act[todayKey] || 0) > 0) {
-      while ((act[localDateKey(cursor)] || 0) > 0) {
+    if (studiedToday) {
+      while (isDayActive(localDateKey(cursor))) {
         streak++;
         cursor.setDate(cursor.getDate() - 1);
       }
     } else {
       cursor.setDate(cursor.getDate() - 1);
-      while ((act[localDateKey(cursor)] || 0) > 0) {
+      while (isDayActive(localDateKey(cursor))) {
         streak++;
         cursor.setDate(cursor.getDate() - 1);
       }
@@ -109,14 +159,88 @@
       d.setDate(d.getDate() - i);
       const dk = localDateKey(d);
       week.push({
+        dk,
         label: dayLetters[d.getDay()],
-        lit: (act[dk] || 0) > 0,
+        lit: isDayActive(dk),
         isToday: i === 0
       });
     }
 
-    return { streak, todayReps, studiedToday: todayReps > 0, week };
+    return { streak, todayReps, todaySecs, totalSecs, studiedToday, week };
   }
+
+  function markUserInteraction() {
+    lastActiveAt = Date.now();
+  }
+
+  ['pointerdown', 'touchstart', 'keydown', 'scroll'].forEach(evt => {
+    window.addEventListener(evt, markUserInteraction, { passive: true, capture: true });
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      lastActiveAt = Date.now();
+    } else if (unsavedSecTicks > 0) {
+      saveProgress();
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (unsavedSecTicks > 0) saveProgress();
+  });
+
+  setInterval(() => {
+    if (!DATA) return;
+    const isVisible = document.visibilityState === 'visible';
+    const isIdle = (Date.now() - lastActiveAt) >= IDLE_LIMIT_MS;
+
+    const statusEl = document.getElementById('drawer-timer-status');
+    if (statusEl) {
+      if (ui.studyPaused) statusEl.textContent = '⏸ Timer paused manually';
+      else if (!isVisible || isIdle) statusEl.textContent = '💤 Auto-paused (idle — tap anywhere to resume)';
+      else statusEl.textContent = '● Tracking active time in app (auto-pauses when idle or screen off)';
+    }
+
+    if (ui.studyPaused || !isVisible || isIdle) return;
+
+    const tk = localDateKey();
+    const wasLit = isDayActive(tk);
+    progress.dailySeconds[tk] = (progress.dailySeconds[tk] || 0) + 1;
+    unsavedSecTicks++;
+    if (unsavedSecTicks >= 5) saveProgress();
+
+    const nowLit = isDayActive(tk);
+    const todaySecs = progress.dailySeconds[tk];
+
+    const chipTimeEl = document.getElementById('streak-time-label');
+    if (chipTimeEl) chipTimeEl.textContent = formatShortDuration(todaySecs);
+
+    if (!wasLit && nowLit) {
+      const stats = computeStreakStats();
+      const chipEl = document.getElementById('streak-open-btn');
+      const countEl = document.getElementById('streak-count-label');
+      if (chipEl) chipEl.classList.remove('cold');
+      if (countEl) countEl.textContent = `🔥 ${stats.streak}d`;
+      const todayCircle = document.querySelector('.day-circle.today-ring');
+      if (todayCircle) {
+        todayCircle.classList.add('lit');
+        todayCircle.textContent = '✓';
+      }
+      saveProgress();
+    }
+
+    if (ui.showTimeDrawer) {
+      const totalSecs = Object.values(progress.dailySeconds).reduce((s, v) => s + (v || 0), 0);
+      const dToday = document.getElementById('drawer-today-time');
+      const dTotal = document.getElementById('drawer-total-time');
+      const rTime = document.getElementById('today-row-time');
+      const rBar = document.getElementById('today-row-bar');
+      if (dToday) dToday.textContent = formatDetailDuration(todaySecs);
+      if (dTotal) dTotal.textContent = formatDetailDuration(totalSecs);
+      if (rTime) rTime.textContent = formatDetailDuration(todaySecs);
+      if (rBar) rBar.style.width = `${Math.min(100, Math.round((todaySecs / 3600) * 100))}%`;
+    }
+  }, 1000);
 
   function isDeckComplete(deck) {
     return deck.cards.length > 0 && deck.cards.every(c => !!progress.doneCards[c.id]);
@@ -279,8 +403,10 @@
   }
 
   function lockNow() {
+    saveProgress();
     localStorage.removeItem(LS_KEY);
     DATA = null;
+    ui.showTimeDrawer = false;
     clearInterval(ui.timerHandle);
     renderLock();
   }
@@ -296,8 +422,98 @@
     `).join('');
 
     return `
-      <div class="streak-banner">
+      <div class="streak-banner" id="streak-banner-btn" title="Tap for daily time breakdown">
         <div class="week-dots">${weekHtml}</div>
+      </div>
+    `;
+  }
+
+  function renderTimeDrawer(stats) {
+    if (!ui.showTimeDrawer) return '';
+    const today = new Date();
+    const todayKey = localDateKey(today);
+    const yest = new Date(today);
+    yest.setDate(yest.getDate() - 1);
+    const yestKey = localDateKey(yest);
+
+    const dateSet = new Set();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      dateSet.add(localDateKey(d));
+    }
+    Object.keys(progress.dailySeconds || {}).forEach(k => dateSet.add(k));
+    Object.keys(progress.dailyActivity || {}).forEach(k => dateSet.add(k));
+
+    const sortedDays = Array.from(dateSet).sort((a, b) => b.localeCompare(a));
+
+    const dayRowsHtml = sortedDays.map(dk => {
+      const secs = (progress.dailySeconds && progress.dailySeconds[dk]) || 0;
+      const reps = (progress.dailyActivity && progress.dailyActivity[dk]) || 0;
+      const pct = Math.min(100, Math.round((secs / 3600) * 100));
+      const isToday = dk === todayKey;
+      const repsTag = reps > 0 ? ` • ${reps} ${reps === 1 ? 'item' : 'items'}` : '';
+      return `
+        <div class="day-log-row">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span style="font-size:14px;font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--text)' : 'var(--muted)'};">
+              ${formatDateHeading(dk, todayKey, yestKey)}
+            </span>
+            <span style="font-size:13.5px;font-weight:700;">
+              <span ${isToday ? 'id="today-row-time"' : ''}>${formatDetailDuration(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
+            </span>
+          </div>
+          <div class="day-log-bar-track">
+            <div class="day-log-bar-fill" ${isToday ? 'id="today-row-bar"' : ''} style="width:${pct}%;"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const statusMsg = ui.studyPaused
+      ? '⏸ Timer paused manually'
+      : '● Tracking active time in app (auto-pauses when idle or screen off)';
+
+    return `
+      <div class="drawer-backdrop" id="time-drawer-backdrop">
+        <div class="drawer-sheet" role="dialog" aria-label="Daily Study Time">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div style="font-size:18px;font-weight:800;">🔥 Daily Streak & Time</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button class="icon-btn" id="drawer-pause-btn" style="padding:7px 11px;font-size:13px;">
+                ${ui.studyPaused ? '▶ Resume' : '⏸ Pause'}
+              </button>
+              <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+            </div>
+          </div>
+
+          <div class="drawer-stat-grid">
+            <div class="drawer-stat-box">
+              <span class="drawer-stat-label">TODAY</span>
+              <span class="drawer-stat-val" id="drawer-today-time" style="color:var(--primary);">${formatDetailDuration(stats.todaySecs)}</span>
+            </div>
+            <div class="drawer-stat-box">
+              <span class="drawer-stat-label">STREAK</span>
+              <span class="drawer-stat-val" style="color:var(--warn);">🔥 ${stats.streak}d</span>
+            </div>
+            <div class="drawer-stat-box">
+              <span class="drawer-stat-label">TOTAL IN-APP</span>
+              <span class="drawer-stat-val" id="drawer-total-time">${formatDetailDuration(stats.totalSecs)}</span>
+            </div>
+          </div>
+
+          <div id="drawer-timer-status" style="font-size:12.5px;color:var(--muted);">
+            ${statusMsg}
+          </div>
+
+          <div style="font-size:13px;font-weight:800;color:var(--muted);margin-top:2px;">
+            BY DAY (60M BAR SCALE)
+          </div>
+
+          <div class="day-log-list">
+            ${dayRowsHtml}
+          </div>
+        </div>
       </div>
     `;
   }
@@ -323,9 +539,11 @@
             <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
           </div>
           <div style="display:flex;align-items:center;gap:7px;">
-            <div class="streak-chip ${stats.studiedToday ? '' : 'cold'}" title="Daily Streak">
-              🔥 ${stats.streak}d
-            </div>
+            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily study log">
+              <span id="streak-count-label">🔥 ${stats.streak}d</span>
+              <span style="opacity:0.55;">•</span>
+              <span id="streak-time-label">${formatShortDuration(stats.todaySecs)}</span>
+            </button>
             <button class="icon-btn" id="theme-btn" aria-label="Toggle theme">☀/☾</button>
             <button class="icon-btn" id="lock-btn" aria-label="Lock">🔒</button>
           </div>
@@ -357,6 +575,8 @@
             </button>
           </div>
         </nav>
+
+        ${renderTimeDrawer(stats)}
       </div>
     `;
 
@@ -662,6 +882,33 @@
     document.getElementById('theme-btn')?.addEventListener('click', toggleTheme);
     document.getElementById('lock-btn')?.addEventListener('click', lockNow);
 
+    const openDrawer = () => {
+      saveProgress();
+      ui.showTimeDrawer = true;
+      renderApp();
+    };
+    document.getElementById('streak-open-btn')?.addEventListener('click', openDrawer);
+    document.getElementById('streak-banner-btn')?.addEventListener('click', openDrawer);
+
+    document.getElementById('drawer-close-btn')?.addEventListener('click', () => {
+      ui.showTimeDrawer = false;
+      renderApp();
+    });
+
+    document.getElementById('time-drawer-backdrop')?.addEventListener('click', e => {
+      if (e.target.id === 'time-drawer-backdrop') {
+        ui.showTimeDrawer = false;
+        renderApp();
+      }
+    });
+
+    document.getElementById('drawer-pause-btn')?.addEventListener('click', () => {
+      ui.studyPaused = !ui.studyPaused;
+      lastActiveAt = Date.now();
+      saveProgress();
+      renderApp();
+    });
+
     document.querySelectorAll('.nav-tab').forEach(btn => {
       btn.addEventListener('click', () => {
         ui.tab = btn.dataset.tab;
@@ -874,7 +1121,7 @@
   }, { passive: true });
 
   document.addEventListener('touchend', e => {
-    if (!DATA) return;
+    if (!DATA || ui.showTimeDrawer) return;
     if (e.target.closest('.pill-scroll') || e.target.tagName === 'INPUT') return;
     const dx = e.changedTouches[0].screenX - sx;
     const dy = e.changedTouches[0].screenY - sy;
