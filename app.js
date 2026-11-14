@@ -699,7 +699,7 @@
       <div class="lock-wrap">
         <div class="lock-card">
           <div style="display:flex;align-items:center;gap:13px;">
-            <img src="icon-192.png?v=7" alt="Cadence" style="width:52px;height:52px;border-radius:14px;border:1px solid var(--border);flex-shrink:0;" />
+            <img src="icon-192.png?v=10" alt="Cadence" style="width:52px;height:52px;border-radius:14px;border:1px solid var(--border);flex-shrink:0;" />
             <div>
               <div style="font-size:24px;font-weight:800;letter-spacing:-0.02em;">Cadence</div>
               <div style="font-size:14.5px;color:var(--muted);margin-top:3px;">Enter your private access key to unlock your personal workspace.</div>
@@ -1121,7 +1121,7 @@
       <div class="app-shell">
         <header class="topbar">
           <div style="display:flex;align-items:center;gap:9px;min-width:0;">
-            <img src="icon-192.png?v=7" alt="" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;" />
+            <img src="icon-192.png?v=10" alt="" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;" />
             <div style="min-width:0;">
               <div class="brand-title">${DATA.appTitle}</div>
               <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
