@@ -295,22 +295,9 @@
       </div>
     `).join('');
 
-    const goalPct = Math.min(100, Math.round((stats.todayReps / DAILY_GOAL) * 100));
-    const goalLabel = stats.todayReps >= DAILY_GOAL
-      ? `🎯 Goal hit (${stats.todayReps})`
-      : (stats.studiedToday ? `Today: ${stats.todayReps}/${DAILY_GOAL}` : `Do 1 card for 🔥!`);
-
     return `
       <div class="streak-banner">
         <div class="week-dots">${weekHtml}</div>
-        <div style="min-width:118px;text-align:right;">
-          <div style="font-size:12px;font-weight:700;color:${stats.todayReps >= DAILY_GOAL ? 'var(--success)' : 'var(--text)'};">
-            ${goalLabel}
-          </div>
-          <div style="width:100%;height:7px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:5px;">
-            <div style="height:100%;width:${goalPct}%;background:${stats.todayReps >= DAILY_GOAL ? 'var(--success)' : 'var(--primary)'};transition:width .25s;"></div>
-          </div>
-        </div>
       </div>
     `;
   }
