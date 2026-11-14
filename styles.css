@@ -43,46 +43,49 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-  min-height: 100dvh;
-  overscroll-behavior-y: contain;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior-y: none;
 }
 
 .app-shell {
   max-width: 540px;
   margin: 0 auto;
-  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding-top: max(10px, env(safe-area-inset-top));
-  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  padding-top: max(6px, env(safe-area-inset-top));
+  overflow: hidden;
 }
 
 .topbar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px 10px;
+  padding: 6px 14px 8px;
   border-bottom: 1px solid var(--border);
   gap: 8px;
 }
 
 .brand-title {
-  font-size: 17px;
+  font-size: 16.5px;
   font-weight: 800;
   letter-spacing: -0.01em;
 }
 
 .brand-sub {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .streak-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 11px;
+  padding: 6px 11px;
   border-radius: 999px;
   font-size: 13.5px;
   font-weight: 800;
@@ -93,7 +96,7 @@ html, body {
   font-family: inherit;
 }
 
-.streak-chip:active, .streak-banner:active {
+.streak-chip:active, .dropdown-btn:active {
   transform: scale(0.985);
 }
 
@@ -107,22 +110,20 @@ html, body {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px 11px;
-  font-size: 14px;
+  border-radius: 11px;
+  padding: 7px 10px;
+  font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-/* Daily Streak Bar */
-.streak-banner {
-  margin: 10px 16px 0;
-  padding: 10px 18px;
-  border-radius: 16px;
-  background: var(--surface);
+/* Week Strip (inside Streak Drawer) */
+.drawer-week-box {
+  padding: 11px 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  cursor: pointer;
-  user-select: none;
 }
 
 .week-dots {
@@ -136,18 +137,18 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  font-size: 10px;
+  gap: 4px;
+  font-size: 10.5px;
   font-weight: 700;
   color: var(--muted);
 }
 
 .day-circle {
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   border-radius: 999px;
   border: 1.5px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -168,15 +169,69 @@ html, body {
 
 .main-area {
   flex: 1;
-  padding: 12px 16px 16px;
+  min-height: 0;
+  padding: 9px 14px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+/* Compact Dropdown Selector Row */
+.selector-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dropdown-btn {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.dropdown-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-caret {
+  color: var(--muted);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.scroll-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 4px;
+  overscroll-behavior-y: contain;
 }
 
 /* Lock Screen */
 .lock-wrap {
-  min-height: 88dvh;
+  height: 100dvh;
+  overflow-y: auto;
   max-width: 440px;
   margin: 0 auto;
   padding: 24px;
@@ -294,13 +349,14 @@ html, body {
 
 /* Card progress dots */
 .card-dots {
+  flex-shrink: 0;
   display: flex;
   gap: 6px;
   align-items: center;
 }
 
 .cdot {
-  height: 7px;
+  height: 6px;
   flex: 1;
   border-radius: 99px;
   background: var(--surface-2);
@@ -315,21 +371,23 @@ html, body {
 
 .cdot.current {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--primary);
+  box-shadow: 0 0 0 1.5px var(--primary);
 }
 
 /* Flashcard */
 .flashcard {
   flex: 1;
-  min-height: 390px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   background: var(--surface);
   border: 1.5px solid var(--border);
-  border-radius: 24px;
-  padding: 22px 20px;
+  border-radius: 22px;
+  padding: 18px 18px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 16px;
+  gap: 13px;
   cursor: pointer;
   user-select: none;
 }
@@ -342,17 +400,17 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 5px 9px;
   border-radius: 9px;
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .card-body {
-  font-size: 18.5px;
-  line-height: 1.54;
+  font-size: 17.5px;
+  line-height: 1.5;
   white-space: pre-line;
   font-weight: 500;
 }
@@ -360,70 +418,70 @@ html, body {
 .card-tip {
   background: var(--surface-2);
   border-left: 4px solid var(--primary);
-  padding: 12px 14px;
+  padding: 11px 13px;
   border-radius: 12px;
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 14.5px;
+  line-height: 1.42;
   color: var(--text);
 }
 
 .thumb-controls {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: 0.9fr 1.35fr 0.9fr;
   gap: 9px;
-  margin-top: auto;
 }
 
-.complete-banner {
-  background: var(--success-bg);
-  border: 1px solid var(--success);
-  border-radius: 16px;
-  padding: 13px 15px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.quiz-controls {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
 }
 
 /* Trigger Cards */
 .trigger-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 18px;
+  border-radius: 18px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 11px;
 }
 
 .box-win {
   background: var(--success-bg);
   border: 1px solid var(--success);
-  border-radius: 14px;
-  padding: 13px 14px;
+  border-radius: 13px;
+  padding: 12px 13px;
 }
 
 .box-avoid {
   background: var(--danger-bg);
   border: 1px solid var(--danger);
-  border-radius: 14px;
-  padding: 13px 14px;
+  border-radius: 13px;
+  padding: 12px 13px;
 }
 
 /* Quiz */
 .quiz-card {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 22px;
-  padding: 20px 18px;
+  border-radius: 20px;
+  padding: 16px 15px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 11px;
 }
 
 .quiz-q {
-  font-size: 17.5px;
-  line-height: 1.52;
+  font-size: 16.5px;
+  line-height: 1.46;
   font-weight: 600;
 }
 
@@ -433,10 +491,10 @@ html, body {
   background: var(--surface-2);
   color: var(--text);
   border: 1.5px solid var(--border);
-  border-radius: 15px;
-  padding: 15px 16px;
-  font-size: 16px;
-  line-height: 1.42;
+  border-radius: 13px;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.38;
   cursor: pointer;
 }
 
@@ -458,19 +516,19 @@ html, body {
   gap: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px 15px;
+  border-radius: 15px;
+  padding: 13px 14px;
 }
 
 .plan-check {
-  width: 26px;
-  height: 26px;
+  width: 25px;
+  height: 25px;
   border-radius: 8px;
   border: 2px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: 14px;
   flex-shrink: 0;
   margin-top: 2px;
   cursor: pointer;
@@ -487,16 +545,13 @@ html, body {
   color: var(--muted);
 }
 
-/* Sticky Bottom Thumb Bar */
+/* Bottom Thumb Bar (Flex Footer) */
 .bottom-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
+  width: 100%;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
-  z-index: 50;
+  padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
 }
 
 .bottom-nav-inner {
@@ -511,14 +566,14 @@ html, body {
   background: transparent;
   color: var(--muted);
   border: none;
-  border-radius: 14px;
-  padding: 10px 4px;
-  font-size: 13px;
+  border-radius: 13px;
+  padding: 8px 4px;
+  font-size: 12.5px;
   font-weight: 700;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   cursor: pointer;
 }
 
@@ -527,7 +582,7 @@ html, body {
   color: var(--primary);
 }
 
-/* Daily Time Bottom Drawer */
+/* Bottom Sheets (Streak Log & Dropdown Pickers) */
 .drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -545,11 +600,43 @@ html, body {
   background: var(--surface);
   border-top: 1px solid var(--border);
   border-radius: 24px 24px 0 0;
-  padding: 18px 18px calc(22px + env(safe-area-inset-bottom));
+  padding: 18px 16px calc(20px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.picker-item {
+  width: 100%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1.5px solid var(--border);
+  border-radius: 13px;
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.picker-item.active {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.picker-item.done-item {
+  border-color: rgba(16, 185, 129, 0.45);
 }
 
 .drawer-stat-grid {
@@ -608,4 +695,5 @@ html, body {
   border-radius: 99px;
   background: var(--primary);
 }
+
 

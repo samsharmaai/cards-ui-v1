@@ -22,7 +22,8 @@
     secLeft: 120,
     timerHandle: null,
     didInitialResume: false,
-    showTimeDrawer: false
+    showTimeDrawer: false,
+    picker: null
   };
 
   if (localStorage.getItem(LS_THEME) === 'light') {
@@ -237,11 +238,11 @@
     return { deckIdx: DATA.decks.length - 1, cardIdx: 0 };
   }
 
-  function scrollActivePillIntoView() {
+  function scrollActivePickerIntoView() {
     requestAnimationFrame(() => {
-      const activePill = document.querySelector('#deck-pill-row .pill.active');
-      if (activePill) {
-        activePill.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      const activeItem = document.querySelector('.picker-item.active');
+      if (activeItem) {
+        activeItem.scrollIntoView({ block: 'nearest' });
       }
     });
   }
@@ -385,25 +386,9 @@
     localStorage.removeItem(LS_KEY);
     DATA = null;
     ui.showTimeDrawer = false;
+    ui.picker = null;
     clearInterval(ui.timerHandle);
     renderLock();
-  }
-
-  function renderStreakBanner(stats) {
-    const weekHtml = stats.week.map(w => `
-      <div class="day-dot">
-        <span>${w.label}</span>
-        <div class="day-circle ${w.lit ? 'lit' : ''} ${w.isToday ? 'today-ring' : ''}">
-          ${w.lit ? '✓' : ''}
-        </div>
-      </div>
-    `).join('');
-
-    return `
-      <div class="streak-banner" id="streak-banner-btn" title="Tap for daily log">
-        <div class="week-dots">${weekHtml}</div>
-      </div>
-    `;
   }
 
   function renderTimeDrawer(stats) {
@@ -413,6 +398,15 @@
     const yest = new Date(today);
     yest.setDate(yest.getDate() - 1);
     const yestKey = localDateKey(yest);
+
+    const weekHtml = stats.week.map(w => `
+      <div class="day-dot">
+        <span>${w.label}</span>
+        <div class="day-circle ${w.lit ? 'lit' : ''} ${w.isToday ? 'today-ring' : ''}">
+          ${w.lit ? '✓' : ''}
+        </div>
+      </div>
+    `).join('');
 
     const dateSet = new Set();
     for (let i = 0; i < 7; i++) {
@@ -450,7 +444,7 @@
 
     return `
       <div class="drawer-backdrop" id="time-drawer-backdrop">
-        <div class="drawer-sheet" role="dialog" aria-label="Daily Study Log">
+        <div class="drawer-sheet" role="dialog" aria-label="Daily Streak & Log">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
             <div style="font-size:18px;font-weight:800;">🔥 Daily Streak & Log</div>
             <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
@@ -471,6 +465,10 @@
             </div>
           </div>
 
+          <div class="drawer-week-box">
+            <div class="week-dots">${weekHtml}</div>
+          </div>
+
           <div style="font-size:12.5px;color:var(--muted);">
             Quietly logged in the background while you study.
           </div>
@@ -487,7 +485,128 @@
     `;
   }
 
-  function renderApp(scrollPill = false) {
+  function renderPickerDrawer() {
+    if (!ui.picker) return '';
+
+    if (ui.picker === 'deck') {
+      const flaggedTotal = Object.values(progress.flaggedCards).filter(Boolean).length;
+      const curDeck = ui.deckIdx === 'flagged' ? null : DATA.decks[ui.deckIdx];
+      const canMarkDone = curDeck && !isDeckComplete(curDeck);
+
+      const deckItems = DATA.decks.map((d, idx) => {
+        const doneCnt = deckDoneCount(d);
+        const complete = doneCnt === d.cards.length;
+        const active = ui.deckIdx === idx;
+        const prefix = complete ? '✓ ' : (active ? '▶ ' : '');
+        return `
+          <button class="picker-item ${active ? 'active' : ''} ${complete && !active ? 'done-item' : ''}" data-pick-deck="${idx}">
+            <div style="min-width:0;">
+              <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${prefix}${d.days} • ${d.title}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${d.phase}</div>
+            </div>
+            <span style="font-size:13px;font-weight:700;color:${complete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${doneCnt}/${d.cards.length}</span>
+          </button>
+        `;
+      }).join('');
+
+      const savedItem = `
+        <button class="picker-item ${ui.deckIdx === 'flagged' ? 'active' : ''}" data-pick-deck="flagged">
+          <div style="font-size:14.5px;font-weight:700;">⭐ Saved Review Pile</div>
+          <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${flaggedTotal}</span>
+        </button>
+      `;
+
+      return `
+        <div class="drawer-backdrop" id="picker-backdrop">
+          <div class="drawer-sheet" role="dialog" aria-label="Select Day or Deck">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:18px;font-weight:800;">Select Day / Deck</div>
+              <div style="display:flex;align-items:center;gap:7px;">
+                ${canMarkDone ? `<button class="icon-btn" id="mark-deck-btn" style="padding:7px 10px;font-size:12.5px;">✓ Mark Deck Done</button>` : ''}
+                <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+              </div>
+            </div>
+            <div class="picker-list">
+              ${deckItems}
+              ${savedItem}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (ui.picker === 'quiz') {
+      const missedCount = Object.values(progress.missedQs).filter(Boolean).length;
+      const allAnswered = DATA.questions.filter(q => progress.answers[q.id] !== undefined).length;
+      const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+
+      const secRows = secs.map(s => {
+        const list = DATA.questions.filter(q => q.sec === s);
+        const ansCnt = list.filter(q => progress.answers[q.id] !== undefined).length;
+        const active = ui.quizFilter === s;
+        return `
+          <button class="picker-item ${active ? 'active' : ''}" data-pick-qfilter="${s}">
+            <div style="font-size:14.5px;font-weight:700;">${active ? '▶ ' : ''}${s}</div>
+            <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${ansCnt}/${list.length}</span>
+          </button>
+        `;
+      }).join('');
+
+      return `
+        <div class="drawer-backdrop" id="picker-backdrop">
+          <div class="drawer-sheet" role="dialog" aria-label="Select Practice Set">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:18px;font-weight:800;">Select Practice Set</div>
+              <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+            </div>
+            <div class="picker-list">
+              <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''}" data-pick-qfilter="ALL">
+                <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'ALL' ? '▶ ' : ''}All Sections</div>
+                <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
+              </button>
+              <button class="picker-item ${ui.quizFilter === 'MISSED' ? 'active' : ''}" data-pick-qfilter="MISSED">
+                <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'MISSED' ? '▶ ' : ''}🔁 Missed Items</div>
+                <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${missedCount}</span>
+              </button>
+              ${secRows}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (ui.picker === 'trig') {
+      const secs = ['ALL', 'Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+      const rows = secs.map(s => {
+        const count = s === 'ALL' ? DATA.triggers.length : DATA.triggers.filter(t => t.sec === s).length;
+        const active = ui.trigFilter === s;
+        return `
+          <button class="picker-item ${active ? 'active' : ''}" data-pick-trigsec="${s}">
+            <div style="font-size:14.5px;font-weight:700;">${active ? '▶ ' : ''}${s === 'ALL' ? 'All Sections' : s}</div>
+            <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${count}</span>
+          </button>
+        `;
+      }).join('');
+
+      return `
+        <div class="drawer-backdrop" id="picker-backdrop">
+          <div class="drawer-sheet" role="dialog" aria-label="Filter Rules">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:18px;font-weight:800;">Filter Rules</div>
+              <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+            </div>
+            <div class="picker-list">
+              ${rows}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return '';
+  }
+
+  function renderApp() {
     if (!DATA) return renderLock();
     const root = document.getElementById('root');
     const totalCards = DATA.decks.reduce((s, d) => s + d.cards.length, 0);
@@ -519,8 +638,6 @@
           </div>
         </header>
 
-        ${renderStreakBanner(stats)}
-
         <main class="main-area">
           ${mainHtml}
         </main>
@@ -547,40 +664,46 @@
         </nav>
 
         ${renderTimeDrawer(stats)}
+        ${renderPickerDrawer()}
       </div>
     `;
 
     bindEvents();
-    if (scrollPill && ui.tab === 'cards') scrollActivePillIntoView();
+    if (ui.picker) scrollActivePickerIntoView();
   }
 
   function renderCardsTab() {
     const flaggedTotal = Object.values(progress.flaggedCards).filter(Boolean).length;
     const resumeTarget = findCurrentTarget();
     const onResumeDeck = ui.deckIdx === resumeTarget.deckIdx;
+    const curDeck = ui.deckIdx === 'flagged' ? null : DATA.decks[ui.deckIdx];
+    const deckAllDone = curDeck ? isDeckComplete(curDeck) : false;
+    const nextDeckExists = curDeck && ui.deckIdx < DATA.decks.length - 1;
 
-    const pills = DATA.decks.map((d, idx) => {
-      const doneCnt = deckDoneCount(d);
-      const complete = doneCnt === d.cards.length;
-      let cls = 'pill';
-      if (ui.deckIdx === idx) cls += ' active';
-      else if (complete) cls += ' done-deck';
-      const prefix = complete ? '✓ ' : '';
-      return `
-        <button class="${cls}" data-deck="${idx}">
-          ${prefix}${d.days} (${doneCnt}/${d.cards.length})
+    const selectorLabel = curDeck
+      ? `${deckAllDone ? '✓ ' : ''}${curDeck.days}: ${curDeck.title} (${deckDoneCount(curDeck)}/${curDeck.cards.length})`
+      : `⭐ Saved (${flaggedTotal})`;
+
+    const rightActionHtml = !onResumeDeck
+      ? `<button class="icon-btn" id="jump-current-btn" style="padding:8px 10px;font-size:12.5px;border-color:var(--primary);color:var(--primary);">▶ ${DATA.decks[resumeTarget.deckIdx].days}</button>`
+      : (deckAllDone && nextDeckExists
+          ? `<button class="icon-btn" id="next-deck-btn" style="background:var(--success);border-color:var(--success);color:#fff;font-size:12.5px;padding:8px 10px;">Next: ${DATA.decks[ui.deckIdx + 1].days} →</button>`
+          : '');
+
+    const selectorBarHtml = `
+      <div class="selector-bar">
+        <button class="dropdown-btn" id="open-deck-picker">
+          <span class="dropdown-btn-label">${selectorLabel}</span>
+          <span class="dropdown-caret">▾</span>
         </button>
-      `;
-    }).join('') + `
-      <button class="pill ${ui.deckIdx === 'flagged' ? 'active' : ''}" data-deck="flagged">
-        ⭐ Saved (${flaggedTotal})
-      </button>
+        ${rightActionHtml}
+      </div>
     `;
 
     const cards = getActiveCards();
     if (!cards.length) {
       return `
-        <div class="pill-scroll" id="deck-pill-row">${pills}</div>
+        ${selectorBarHtml}
         <div class="flashcard" style="justify-content:center;align-items:center;text-align:center;">
           <div style="font-size:18px;font-weight:700;">No saved cards yet</div>
           <div style="color:var(--muted);font-size:15px;">Tap ☆ Save on any tough card to keep it in your review pile.</div>
@@ -592,8 +715,6 @@
     const c = cards[ui.cardIdx];
     const isFlagged = !!progress.flaggedCards[c.id];
     const isCardDone = !!progress.doneCards[c.id];
-    const curDeck = ui.deckIdx === 'flagged' ? null : DATA.decks[ui.deckIdx];
-    const deckAllDone = curDeck ? isDeckComplete(curDeck) : false;
 
     const dotsHtml = cards.map((item, idx) => {
       let dCls = 'cdot';
@@ -602,52 +723,21 @@
       return `<div class="${dCls}" data-dot="${idx}"></div>`;
     }).join('');
 
-    const deckHeaderLeft = curDeck
-      ? `${curDeck.days}: ${curDeck.title}`
-      : 'Saved Review Pile';
-
-    const jumpBtnHtml = !onResumeDeck
-      ? `<button class="icon-btn" id="jump-current-btn" style="padding:5px 10px;font-size:12px;border-color:var(--primary);color:var(--primary);">▶ Jump to Current (${DATA.decks[resumeTarget.deckIdx].days})</button>`
-      : (curDeck && !deckAllDone
-          ? `<button class="icon-btn" id="mark-deck-btn" style="padding:5px 10px;font-size:12px;">✓ Mark All ${cards.length} Done</button>`
-          : (curDeck && deckAllDone
-              ? `<span style="font-size:12.5px;font-weight:700;color:var(--success);">✓ Deck Completed</span>`
-              : ''));
-
-    const nextDeckExists = curDeck && ui.deckIdx < DATA.decks.length - 1;
-    const bannerHtml = deckAllDone && nextDeckExists ? `
-      <div class="complete-banner">
-        <div style="font-size:14px;font-weight:700;color:var(--success);">🎉 ${curDeck.days} Complete!</div>
-        <button class="icon-btn" id="next-deck-btn" style="background:var(--success);border-color:var(--success);color:#fff;font-size:13px;padding:7px 12px;">
-          Next: ${DATA.decks[ui.deckIdx + 1].days} →
-        </button>
-      </div>
-    ` : '';
-
     const centerBtnHtml = ui.flipped
-      ? `<button class="success-btn" id="card-got-it" style="padding:15px 10px;">${isCardDone ? '✓ Done • Next →' : '✓ Got It • Next'}</button>`
-      : `<button class="primary-btn" id="card-flip" style="padding:15px 10px;">Reveal Answer</button>`;
+      ? `<button class="success-btn" id="card-got-it" style="padding:14px 10px;">${isCardDone ? '✓ Done • Next →' : '✓ Got It • Next'}</button>`
+      : `<button class="primary-btn" id="card-flip" style="padding:14px 10px;">Reveal Answer</button>`;
 
     return `
-      <div class="pill-scroll" id="deck-pill-row">${pills}</div>
-
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-        <span style="font-size:13px;font-weight:700;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          ${deckHeaderLeft}
-        </span>
-        ${jumpBtnHtml}
-      </div>
+      ${selectorBarHtml}
 
       <div class="card-dots">${dotsHtml}</div>
-
-      ${bannerHtml}
 
       <div class="flashcard ${isCardDone ? 'card-done' : ''}" id="flashcard-box">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
           <span class="badge">${isCardDone ? '✓ ' : ''}${c.tag}</span>
           <div style="display:flex;align-items:center;gap:6px;">
             <span style="font-size:13px;font-weight:700;color:var(--muted);">${ui.cardIdx + 1}/${cards.length}</span>
-            <button class="icon-btn" id="flag-card-btn" style="padding:5px 10px;font-size:13.5px;">
+            <button class="icon-btn" id="flag-card-btn" style="padding:5px 10px;font-size:13px;">
               ${isFlagged ? '⭐ Saved' : '☆ Save'}
             </button>
           </div>
@@ -655,30 +745,23 @@
 
         <div class="card-body">${ui.flipped ? c.a : c.q}</div>
 
-        <div style="display:flex;flex-direction:column;gap:11px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
           ${ui.flipped ? `<div class="card-tip"><strong>⚡ Key Rule:</strong> ${c.tip}</div>` : ''}
-          <div style="text-align:center;font-size:13.5px;font-weight:600;color:var(--primary);">
+          <div style="text-align:center;font-size:13px;font-weight:600;color:var(--primary);">
             ${ui.flipped ? '👆 Tap card for prompt • Or tap Got It below' : '👆 Tap anywhere on card to flip'}
           </div>
         </div>
       </div>
 
       <div class="thumb-controls">
-        <button class="sec-btn" id="card-prev" ${ui.cardIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="sec-btn" id="card-prev" style="padding:14px 10px;" ${ui.cardIdx === 0 ? 'disabled' : ''}>← Prev</button>
         ${centerBtnHtml}
-        <button class="sec-btn" id="card-next" ${ui.cardIdx === cards.length - 1 ? 'disabled' : ''}>Skip →</button>
+        <button class="sec-btn" id="card-next" style="padding:14px 10px;" ${ui.cardIdx === cards.length - 1 ? 'disabled' : ''}>Skip →</button>
       </div>
     `;
   }
 
   function renderTriggersTab() {
-    const secs = ['ALL', 'Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
-    const secPills = secs.map(s => `
-      <button class="pill ${ui.trigFilter === s ? 'active' : ''}" data-trigsec="${s}">
-        ${s === 'ALL' ? `All (${DATA.triggers.length})` : s}
-      </button>
-    `).join('');
-
     const q = ui.trigSearch.toLowerCase().trim();
     const list = DATA.triggers.filter(t => {
       if (ui.trigFilter !== 'ALL' && t.sec !== ui.trigFilter) return false;
@@ -704,9 +787,14 @@
     `).join('');
 
     return `
-      <input id="trig-search" class="text-input" placeholder="Filter rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="padding:13px 15px;font-size:16px;" />
-      <div class="pill-scroll">${secPills}</div>
-      <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="selector-bar">
+        <input id="trig-search" class="text-input" placeholder="Search rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;padding:8.5px 12px;font-size:15px;border-radius:12px;" />
+        <button class="dropdown-btn" id="open-trig-picker" style="flex:0 0 auto;width:auto;">
+          <span class="dropdown-btn-label">${ui.trigFilter === 'ALL' ? `All (${DATA.triggers.length})` : ui.trigFilter}</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+      </div>
+      <div class="scroll-pane">
         ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
       </div>
     `;
@@ -714,26 +802,21 @@
 
   function renderQuizTab() {
     const missedCount = Object.values(progress.missedQs).filter(Boolean).length;
-    const filters = [
-      { id: 'ALL', label: `All (${DATA.questions.length})` },
-      { id: 'MISSED', label: `🔁 Missed (${missedCount})` },
-      { id: 'Sec 1', label: 'Sec 1' },
-      { id: 'Sec 2', label: 'Sec 2' },
-      { id: 'Sec 3', label: 'Sec 3' },
-      { id: 'Sec 4', label: 'Sec 4' },
-      { id: 'Sec 5', label: 'Sec 5' },
-      { id: 'Sec 6', label: 'Sec 6' }
-    ];
-
-    const filterHtml = filters.map(f => `
-      <button class="pill ${ui.quizFilter === f.id ? 'active' : ''}" data-qfilter="${f.id}">${f.label}</button>
-    `).join('');
-
     const qs = getActiveQuestions();
+
+    const activeFilterLabel = ui.quizFilter === 'ALL'
+      ? 'All Sections'
+      : (ui.quizFilter === 'MISSED' ? `🔁 Missed (${missedCount})` : ui.quizFilter);
+
     if (!qs.length) {
       return `
-        <div class="pill-scroll">${filterHtml}</div>
-        <div class="quiz-card" style="text-align:center;padding:36px 20px;">
+        <div class="selector-bar">
+          <button class="dropdown-btn" id="open-quiz-picker">
+            <span class="dropdown-btn-label">${activeFilterLabel}</span>
+            <span class="dropdown-caret">▾</span>
+          </button>
+        </div>
+        <div class="quiz-card" style="justify-content:center;align-items:center;text-align:center;padding:36px 20px;">
           <div style="font-size:18px;font-weight:700;">Zero missed items right now! 🎉</div>
           <div style="font-size:15px;color:var(--muted);">Any question you miss lands here automatically until you master it.</div>
         </div>
@@ -760,17 +843,20 @@
     }).join('');
 
     return `
-      <div class="pill-scroll">${filterHtml}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13.5px;color:var(--muted);">
-        <span><strong>${ui.qIdx + 1}/${qs.length}</strong> • ${q.sec} • Score: ${rightCount}/${answeredList.length}</span>
-        <button class="icon-btn" id="toggle-timer" style="padding:5px 10px;font-size:13px;">
+      <div class="selector-bar">
+        <button class="dropdown-btn" id="open-quiz-picker">
+          <span class="dropdown-btn-label">${activeFilterLabel} • Q ${ui.qIdx + 1}/${qs.length}</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+        <span style="font-size:12.5px;font-weight:700;color:var(--muted);white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>
+        <button class="icon-btn" id="toggle-timer" style="padding:7px 9px;font-size:12.5px;">
           <span id="timer-badge">${ui.timerOn ? `⏱ ${m}:${s}` : '⏱ Off'}</span>
         </button>
       </div>
 
-      <div class="quiz-card">
+      <div class="quiz-card" id="quiz-card-box">
         <div class="quiz-q">${q.q}</div>
-        <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;flex-direction:column;gap:9px;">
           ${optsHtml}
         </div>
         ${chosen !== undefined ? `
@@ -783,9 +869,9 @@
         ` : ''}
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:auto;">
-        <button class="sec-btn" id="q-prev" ${ui.qIdx === 0 ? 'disabled' : ''}>← Prev</button>
-        <button class="primary-btn" id="q-next" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''} style="padding:15px;">Next →</button>
+      <div class="quiz-controls">
+        <button class="sec-btn" id="q-prev" style="padding:14px 12px;" ${ui.qIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="primary-btn" id="q-next" style="padding:14px 12px;" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>
       </div>
     `;
   }
@@ -812,16 +898,16 @@
     }).join('');
 
     return `
-      <div class="trigger-card">
+      <div class="trigger-card" style="flex-shrink:0;padding:13px 15px;gap:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:16px;font-weight:700;">Checklist Progress</span>
-          <span style="font-size:16px;font-weight:800;color:var(--primary);">${pct}% (${doneCount}/${DATA.plan.length})</span>
+          <span style="font-size:15.5px;font-weight:700;">Checklist Progress</span>
+          <span style="font-size:15.5px;font-weight:800;color:var(--primary);">${pct}% (${doneCount}/${DATA.plan.length})</span>
         </div>
-        <div style="width:100%;height:10px;border-radius:99px;background:var(--surface-2);overflow:hidden;">
+        <div style="width:100%;height:9px;border-radius:99px;background:var(--surface-2);overflow:hidden;">
           <div style="height:100%;width:${pct}%;background:var(--primary);transition:width .2s;"></div>
         </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
+      <div class="scroll-pane">
         ${rows}
       </div>
     `;
@@ -841,10 +927,10 @@
     if (ui.cardIdx < cards.length - 1) {
       ui.cardIdx++;
       ui.flipped = false;
-      renderApp(false);
+      renderApp();
     } else {
       ui.flipped = false;
-      renderApp(true);
+      renderApp();
     }
   }
 
@@ -854,11 +940,11 @@
 
     const openDrawer = () => {
       saveProgress();
+      ui.picker = null;
       ui.showTimeDrawer = true;
       renderApp();
     };
     document.getElementById('streak-open-btn')?.addEventListener('click', openDrawer);
-    document.getElementById('streak-banner-btn')?.addEventListener('click', openDrawer);
 
     document.getElementById('drawer-close-btn')?.addEventListener('click', () => {
       ui.showTimeDrawer = false;
@@ -872,55 +958,102 @@
       }
     });
 
+    // Picker open / close / select handlers
+    document.getElementById('open-deck-picker')?.addEventListener('click', () => {
+      ui.picker = 'deck';
+      renderApp();
+    });
+    document.getElementById('open-quiz-picker')?.addEventListener('click', () => {
+      ui.picker = 'quiz';
+      renderApp();
+    });
+    document.getElementById('open-trig-picker')?.addEventListener('click', () => {
+      ui.picker = 'trig';
+      renderApp();
+    });
+
+    document.getElementById('picker-close-btn')?.addEventListener('click', () => {
+      ui.picker = null;
+      renderApp();
+    });
+    document.getElementById('picker-backdrop')?.addEventListener('click', e => {
+      if (e.target.id === 'picker-backdrop') {
+        ui.picker = null;
+        renderApp();
+      }
+    });
+
+    document.querySelectorAll('[data-pick-deck]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.deckIdx = btn.dataset.pickDeck === 'flagged' ? 'flagged' : Number(btn.dataset.pickDeck);
+        if (typeof ui.deckIdx === 'number') {
+          const firstOpen = DATA.decks[ui.deckIdx].cards.findIndex(c => !progress.doneCards[c.id]);
+          ui.cardIdx = firstOpen !== -1 ? firstOpen : 0;
+        } else {
+          ui.cardIdx = 0;
+        }
+        ui.flipped = false;
+        ui.picker = null;
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('[data-pick-qfilter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.quizFilter = btn.dataset.pickQfilter;
+        ui.qIdx = 0;
+        ui.secLeft = 120;
+        ui.picker = null;
+        startQuizTimerIfNeeded();
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('[data-pick-trigsec]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.trigFilter = btn.dataset.pickTrigsec;
+        ui.picker = null;
+        renderApp();
+      });
+    });
+
+    document.getElementById('mark-deck-btn')?.addEventListener('click', () => {
+      const cards = getActiveCards();
+      let newlyDone = 0;
+      cards.forEach(c => {
+        if (!progress.doneCards[c.id]) {
+          progress.doneCards[c.id] = true;
+          newlyDone++;
+        }
+      });
+      if (newlyDone > 0) recordStudyAction(newlyDone);
+      else saveProgress();
+      ui.picker = null;
+      renderApp();
+    });
+
     document.querySelectorAll('.nav-tab').forEach(btn => {
       btn.addEventListener('click', () => {
         ui.tab = btn.dataset.tab;
+        ui.picker = null;
         ui.secLeft = 120;
         startQuizTimerIfNeeded();
-        renderApp(ui.tab === 'cards');
+        renderApp();
       });
     });
 
     if (ui.tab === 'cards') {
-      document.querySelectorAll('[data-deck]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          ui.deckIdx = btn.dataset.deck === 'flagged' ? 'flagged' : Number(btn.dataset.deck);
-          if (typeof ui.deckIdx === 'number') {
-            const firstOpen = DATA.decks[ui.deckIdx].cards.findIndex(c => !progress.doneCards[c.id]);
-            ui.cardIdx = firstOpen !== -1 ? firstOpen : 0;
-          } else {
-            ui.cardIdx = 0;
-          }
-          ui.flipped = false;
-          renderApp(true);
-        });
-      });
-
       document.querySelectorAll('[data-dot]').forEach(dot => {
         dot.addEventListener('click', () => {
           ui.cardIdx = Number(dot.dataset.dot);
           ui.flipped = false;
-          renderApp(false);
+          renderApp();
         });
       });
 
       document.getElementById('jump-current-btn')?.addEventListener('click', () => {
         jumpToResumeTarget();
-        renderApp(true);
-      });
-
-      document.getElementById('mark-deck-btn')?.addEventListener('click', () => {
-        const cards = getActiveCards();
-        let newlyDone = 0;
-        cards.forEach(c => {
-          if (!progress.doneCards[c.id]) {
-            progress.doneCards[c.id] = true;
-            newlyDone++;
-          }
-        });
-        if (newlyDone > 0) recordStudyAction(newlyDone);
-        else saveProgress();
-        renderApp(true);
+        renderApp();
       });
 
       document.getElementById('next-deck-btn')?.addEventListener('click', () => {
@@ -929,7 +1062,7 @@
           const firstOpen = DATA.decks[ui.deckIdx].cards.findIndex(c => !progress.doneCards[c.id]);
           ui.cardIdx = firstOpen !== -1 ? firstOpen : 0;
           ui.flipped = false;
-          renderApp(true);
+          renderApp();
         }
       });
 
@@ -940,38 +1073,32 @@
         if (!cur) return;
         progress.flaggedCards[cur.id] = !progress.flaggedCards[cur.id];
         saveProgress();
-        renderApp(false);
+        renderApp();
       });
 
       document.getElementById('flashcard-box')?.addEventListener('click', () => {
         ui.flipped = !ui.flipped;
-        renderApp(false);
+        renderApp();
       });
 
       document.getElementById('card-flip')?.addEventListener('click', () => {
         ui.flipped = true;
-        renderApp(false);
+        renderApp();
       });
 
       document.getElementById('card-got-it')?.addEventListener('click', completeCurrentCardAndAdvance);
 
       document.getElementById('card-prev')?.addEventListener('click', () => {
-        if (ui.cardIdx > 0) { ui.cardIdx--; ui.flipped = false; renderApp(false); }
+        if (ui.cardIdx > 0) { ui.cardIdx--; ui.flipped = false; renderApp(); }
       });
 
       document.getElementById('card-next')?.addEventListener('click', () => {
         const cards = getActiveCards();
-        if (ui.cardIdx < cards.length - 1) { ui.cardIdx++; ui.flipped = false; renderApp(false); }
+        if (ui.cardIdx < cards.length - 1) { ui.cardIdx++; ui.flipped = false; renderApp(); }
       });
     }
 
     if (ui.tab === 'triggers') {
-      document.querySelectorAll('[data-trigsec]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          ui.trigFilter = btn.dataset.trigsec;
-          renderApp();
-        });
-      });
       const input = document.getElementById('trig-search');
       if (input) {
         input.addEventListener('input', e => {
@@ -988,16 +1115,6 @@
     }
 
     if (ui.tab === 'quiz') {
-      document.querySelectorAll('[data-qfilter]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          ui.quizFilter = btn.dataset.qfilter;
-          ui.qIdx = 0;
-          ui.secLeft = 120;
-          startQuizTimerIfNeeded();
-          renderApp();
-        });
-      });
-
       document.getElementById('toggle-timer')?.addEventListener('click', () => {
         ui.timerOn = !ui.timerOn;
         ui.secLeft = 120;
@@ -1017,6 +1134,10 @@
           recordStudyAction(1);
           clearInterval(ui.timerHandle);
           renderApp();
+          requestAnimationFrame(() => {
+            const box = document.getElementById('quiz-card-box');
+            if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+          });
         });
       });
 
@@ -1070,7 +1191,7 @@
           ui.cardIdx = firstOpen !== -1 ? firstOpen : 0;
           ui.flipped = false;
           ui.tab = 'cards';
-          renderApp(true);
+          renderApp();
         });
       });
     }
@@ -1084,15 +1205,15 @@
   }, { passive: true });
 
   document.addEventListener('touchend', e => {
-    if (!DATA || ui.showTimeDrawer) return;
-    if (e.target.closest('.pill-scroll') || e.target.tagName === 'INPUT') return;
+    if (!DATA || ui.showTimeDrawer || ui.picker) return;
+    if (e.target.tagName === 'INPUT') return;
     const dx = e.changedTouches[0].screenX - sx;
     const dy = e.changedTouches[0].screenY - sy;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       if (ui.tab === 'cards') {
         const cards = getActiveCards();
-        if (dx < 0 && ui.cardIdx < cards.length - 1) { ui.cardIdx++; ui.flipped = false; renderApp(false); }
-        else if (dx > 0 && ui.cardIdx > 0) { ui.cardIdx--; ui.flipped = false; renderApp(false); }
+        if (dx < 0 && ui.cardIdx < cards.length - 1) { ui.cardIdx++; ui.flipped = false; renderApp(); }
+        else if (dx > 0 && ui.cardIdx > 0) { ui.cardIdx--; ui.flipped = false; renderApp(); }
       } else if (ui.tab === 'quiz') {
         const qs = getActiveQuestions();
         if (dx < 0 && ui.qIdx < qs.length - 1) { ui.qIdx++; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
