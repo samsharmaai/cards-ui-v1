@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cadence-v5';
+const CACHE_NAME = 'cadence-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -6,8 +6,8 @@ const ASSETS = [
   './app.js',
   './vault.json',
   './manifest.webmanifest',
-  './icon-192.png?v=5',
-  './icon-512.png?v=5'
+  './icon-192.png?v=6',
+  './icon-512.png?v=6'
 ];
 
 self.addEventListener('install', event => {
