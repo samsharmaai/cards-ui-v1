@@ -89,12 +89,14 @@
     return {
       flaggedCards: parsed.flaggedCards || {},
       doneCards: parsed.doneCards || {},
+      doneRules: parsed.doneRules || {},
       answers: parsed.answers || {},
       missedQs: parsed.missedQs || {},
       doneDays: parsed.doneDays || {},
       dailyActivity: parsed.dailyActivity || {},
       dailySeconds: parsed.dailySeconds || {},
       cardMeta: parsed.cardMeta || {},
+      ruleMeta: parsed.ruleMeta || {},
       qMeta: parsed.qMeta || {},
       dayMeta: parsed.dayMeta || {},
       lastDeckIdx: parsed.lastDeckIdx || 0,
@@ -133,6 +135,22 @@
       } else {
         if (a.flaggedCards[k] || b.flaggedCards[k]) out.flaggedCards[k] = true;
         if (ta) out.cardMeta[k] = ta;
+      }
+    });
+
+    // Timestamp-aware merge for completed rules
+    Object.keys({ ...a.doneRules, ...b.doneRules, ...a.ruleMeta, ...b.ruleMeta }).forEach(k => {
+      const ta = a.ruleMeta[k] || 0;
+      const tb = b.ruleMeta[k] || 0;
+      if (ta > tb) {
+        if (a.doneRules[k]) out.doneRules[k] = true;
+        out.ruleMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.doneRules[k]) out.doneRules[k] = true;
+        out.ruleMeta[k] = tb;
+      } else {
+        if (a.doneRules[k] || b.doneRules[k]) out.doneRules[k] = true;
+        if (ta) out.ruleMeta[k] = ta;
       }
     });
 
@@ -530,6 +548,7 @@
       const beforeSig = JSON.stringify([
         progress.doneCards,
         progress.flaggedCards,
+        progress.doneRules,
         progress.answers,
         progress.doneDays
       ]);
@@ -561,6 +580,7 @@
       const afterSig = JSON.stringify([
         progress.doneCards,
         progress.flaggedCards,
+        progress.doneRules,
         progress.answers,
         progress.doneDays
       ]);
@@ -945,16 +965,19 @@
     if (ui.picker === 'quiz') {
       const missedCount = Object.values(progress.missedQs).filter(Boolean).length;
       const allAnswered = DATA.questions.filter(q => progress.answers[q.id] !== undefined).length;
+      const allDone = DATA.questions.length > 0 && allAnswered === DATA.questions.length;
       const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
 
       const secRows = secs.map(s => {
         const list = DATA.questions.filter(q => q.sec === s);
         const ansCnt = list.filter(q => progress.answers[q.id] !== undefined).length;
+        const complete = list.length > 0 && ansCnt === list.length;
         const active = ui.quizFilter === s;
+        const prefix = complete ? '✓ ' : (active ? '▶ ' : '');
         return `
-          <button class="picker-item ${active ? 'active' : ''}" data-pick-qfilter="${s}">
-            <div style="font-size:14.5px;font-weight:700;">${active ? '▶ ' : ''}${s}</div>
-            <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${ansCnt}/${list.length}</span>
+          <button class="picker-item ${active ? 'active' : ''} ${complete && !active ? 'done-item' : ''}" data-pick-qfilter="${s}">
+            <div style="font-size:14.5px;font-weight:700;">${prefix}${s}</div>
+            <span style="font-size:13px;font-weight:700;color:${complete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${ansCnt}/${list.length}</span>
           </button>
         `;
       }).join('');
@@ -967,9 +990,9 @@
               <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
             </div>
             <div class="picker-list">
-              <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''}" data-pick-qfilter="ALL">
-                <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'ALL' ? '▶ ' : ''}All Sections</div>
-                <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
+              <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''} ${allDone && ui.quizFilter !== 'ALL' ? 'done-item' : ''}" data-pick-qfilter="ALL">
+                <div style="font-size:14.5px;font-weight:700;">${allDone ? '✓ ' : (ui.quizFilter === 'ALL' ? '▶ ' : '')}All Sections</div>
+                <span style="font-size:13px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
               </button>
               <button class="picker-item ${ui.quizFilter === 'MISSED' ? 'active' : ''}" data-pick-qfilter="MISSED">
                 <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'MISSED' ? '▶ ' : ''}🔁 Missed Items</div>
@@ -984,13 +1007,24 @@
 
     if (ui.picker === 'trig') {
       const secs = ['ALL', 'Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+      const curTargets = DATA.triggers
+        .map((t, idx) => ({ t, id: 'r_' + idx }))
+        .filter(item => ui.trigFilter === 'ALL' || item.t.sec === ui.trigFilter);
+      const canMarkRulesDone = curTargets.some(item => !progress.doneRules[item.id]);
+
       const rows = secs.map(s => {
-        const count = s === 'ALL' ? DATA.triggers.length : DATA.triggers.filter(t => t.sec === s).length;
+        const indices = [];
+        DATA.triggers.forEach((t, idx) => {
+          if (s === 'ALL' || t.sec === s) indices.push('r_' + idx);
+        });
+        const doneCnt = indices.filter(id => !!progress.doneRules[id]).length;
+        const complete = indices.length > 0 && doneCnt === indices.length;
         const active = ui.trigFilter === s;
+        const prefix = complete ? '✓ ' : (active ? '▶ ' : '');
         return `
-          <button class="picker-item ${active ? 'active' : ''}" data-pick-trigsec="${s}">
-            <div style="font-size:14.5px;font-weight:700;">${active ? '▶ ' : ''}${s === 'ALL' ? 'All Sections' : s}</div>
-            <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${count}</span>
+          <button class="picker-item ${active ? 'active' : ''} ${complete && !active ? 'done-item' : ''}" data-pick-trigsec="${s}">
+            <div style="font-size:14.5px;font-weight:700;">${prefix}${s === 'ALL' ? 'All Sections' : s}</div>
+            <span style="font-size:13px;font-weight:700;color:${complete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${doneCnt}/${indices.length}</span>
           </button>
         `;
       }).join('');
@@ -1000,7 +1034,10 @@
           <div class="drawer-sheet" role="dialog" aria-label="Filter Rules">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
               <div style="font-size:18px;font-weight:800;">Filter Rules</div>
-              <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+              <div style="display:flex;align-items:center;gap:7px;">
+                ${canMarkRulesDone ? `<button class="icon-btn" id="mark-rules-btn" style="padding:7px 10px;font-size:12.5px;">✓ Mark ${ui.trigFilter === 'ALL' ? 'All' : ui.trigFilter} Done</button>` : ''}
+                <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+              </div>
             </div>
             <div class="picker-list">
               ${rows}
@@ -1263,39 +1300,67 @@
 
   function renderTriggersTab() {
     const q = ui.trigSearch.toLowerCase().trim();
-    const list = DATA.triggers.filter(t => {
-      if (ui.trigFilter !== 'ALL' && t.sec !== ui.trigFilter) return false;
+    const indexed = DATA.triggers.map((t, idx) => ({ t, idx, id: 'r_' + idx }));
+    const secScope = indexed.filter(item => ui.trigFilter === 'ALL' || item.t.sec === ui.trigFilter);
+    const secDoneCnt = secScope.filter(item => !!progress.doneRules[item.id]).length;
+    const secComplete = secScope.length > 0 && secDoneCnt === secScope.length;
+
+    const list = secScope.filter(item => {
       if (!q) return true;
-      return (t.cue + ' ' + t.pick + ' ' + t.avoid).toLowerCase().includes(q);
+      return (item.t.cue + ' ' + item.t.pick + ' ' + item.t.avoid).toLowerCase().includes(q);
     });
 
-    const items = list.map(t => `
-      <div class="trigger-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="badge">${t.sec}</span>
+    const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+    const curSecPos = secs.indexOf(ui.trigFilter);
+    const nextSec = curSecPos >= 0 && curSecPos < secs.length - 1 ? secs[curSecPos + 1] : null;
+
+    const items = list.map(({ t, id }) => {
+      const isDone = !!progress.doneRules[id];
+      return `
+        <div class="trigger-card" style="${isDone ? 'border-color:rgba(16,185,129,0.55);' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}${t.sec}</span>
+            <button class="icon-btn" data-toggle-rule="${id}" style="padding:5px 10px;font-size:12.5px;${isDone ? 'border-color:rgba(16,185,129,0.55);color:var(--success);background:var(--success-bg);' : ''}">
+              ${isDone ? '✓ Done' : '○ Mark Read'}
+            </button>
+          </div>
+          <div style="font-size:16.5px;font-weight:700;line-height:1.42;">“${t.cue}”</div>
+          <div class="box-win">
+            <div style="font-size:12px;font-weight:800;color:var(--success);margin-bottom:4px;">✅ PICK</div>
+            <div style="font-size:15.5px;line-height:1.4;font-weight:600;">${t.pick}</div>
+          </div>
+          <div class="box-avoid">
+            <div style="font-size:12px;font-weight:800;color:var(--danger);margin-bottom:4px;">❌ AVOID</div>
+            <div style="font-size:14.5px;line-height:1.4;color:var(--muted);">${t.avoid}</div>
+          </div>
         </div>
-        <div style="font-size:16.5px;font-weight:700;line-height:1.42;">“${t.cue}”</div>
-        <div class="box-win">
-          <div style="font-size:12px;font-weight:800;color:var(--success);margin-bottom:4px;">✅ PICK</div>
-          <div style="font-size:15.5px;line-height:1.4;font-weight:600;">${t.pick}</div>
-        </div>
-        <div class="box-avoid">
-          <div style="font-size:12px;font-weight:800;color:var(--danger);margin-bottom:4px;">❌ AVOID</div>
-          <div style="font-size:14.5px;line-height:1.4;color:var(--muted);">${t.avoid}</div>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
+
+    const footerActionHtml = !q && ui.trigFilter !== 'ALL'
+      ? (secComplete
+          ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-radius:15px;background:var(--success-bg);border:1px solid var(--success);">
+               <span style="font-size:14px;font-weight:800;color:var(--success);">✓ ${ui.trigFilter} Rules Complete (${secDoneCnt}/${secScope.length})</span>
+               ${nextSec ? `<button class="icon-btn" id="next-trigsec-btn" style="background:var(--success);border-color:var(--success);color:#fff;padding:7px 11px;font-size:13px;">Next: ${nextSec} →</button>` : ''}
+             </div>`
+          : `<button class="sec-btn" id="mark-rules-inline-btn" style="padding:12px;font-size:14.5px;">✓ Mark All ${ui.trigFilter} Rules Done (${secDoneCnt}/${secScope.length})</button>`)
+      : '';
+
+    const dropLabel = ui.trigFilter === 'ALL'
+      ? `${secComplete ? '✓ ' : ''}All (${secDoneCnt}/${secScope.length})`
+      : `${secComplete ? '✓ ' : ''}${ui.trigFilter} (${secDoneCnt}/${secScope.length})`;
 
     return `
       <div class="selector-bar">
         <input id="trig-search" class="text-input" placeholder="Search rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;padding:8.5px 12px;font-size:15px;border-radius:12px;" />
-        <button class="dropdown-btn" id="open-trig-picker" style="flex:0 0 auto;width:auto;">
-          <span class="dropdown-btn-label">${ui.trigFilter === 'ALL' ? `All (${DATA.triggers.length})` : ui.trigFilter}</span>
+        <button class="dropdown-btn" id="open-trig-picker" style="flex:0 0 auto;width:auto;${secComplete ? 'border-color:rgba(16,185,129,0.6);color:var(--success);' : ''}">
+          <span class="dropdown-btn-label">${dropLabel}</span>
           <span class="dropdown-caret">▾</span>
         </button>
       </div>
       <div class="scroll-pane">
         ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
+        ${footerActionHtml}
       </div>
     `;
   }
@@ -1329,8 +1394,23 @@
 
     const answeredList = qs.filter(item => progress.answers[item.id] !== undefined);
     const rightCount = answeredList.filter(item => progress.answers[item.id] === item.ans).length;
+    const setComplete = ui.quizFilter !== 'MISSED' && qs.length > 0 && answeredList.length === qs.length;
     const m = Math.floor(ui.secLeft / 60);
     const s = String(ui.secLeft % 60).padStart(2, '0');
+
+    const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+    const curSecPos = secs.indexOf(ui.quizFilter);
+    const nextQuizSec = curSecPos >= 0 && curSecPos < secs.length - 1 ? secs[curSecPos + 1] : null;
+
+    const qDotsHtml = qs.map((item, idx) => {
+      let dCls = 'cdot';
+      const ans = progress.answers[item.id];
+      if (ans !== undefined) {
+        dCls += (ans === item.ans) ? ' done' : ' wrong';
+      }
+      if (idx === ui.qIdx) dCls += ' current';
+      return `<div class="${dCls}" data-qdot="${idx}"></div>`;
+    }).join('');
 
     const optsHtml = q.opts.map((opt, idx) => {
       let cls = 'opt-btn';
@@ -1342,19 +1422,25 @@
       return `<button class="${cls}" data-opt="${idx}">${prefix}${opt}</button>`;
     }).join('');
 
+    const rightControlBtn = (ui.qIdx === qs.length - 1 && setComplete && nextQuizSec)
+      ? `<button class="success-btn" id="next-qsec-btn" style="padding:14px 12px;">✓ Done • ${nextQuizSec} →</button>`
+      : `<button class="primary-btn" id="q-next" style="padding:14px 12px;" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>`;
+
     return `
       <div class="selector-bar">
-        <button class="dropdown-btn" id="open-quiz-picker">
-          <span class="dropdown-btn-label">${activeFilterLabel} • Q ${ui.qIdx + 1}/${qs.length}</span>
+        <button class="dropdown-btn" id="open-quiz-picker" style="${setComplete ? 'border-color:rgba(16,185,129,0.6);' : ''}">
+          <span class="dropdown-btn-label" style="${setComplete ? 'color:var(--success);' : ''}">${setComplete ? '✓ ' : ''}${activeFilterLabel} • Q ${ui.qIdx + 1}/${qs.length}</span>
           <span class="dropdown-caret">▾</span>
         </button>
-        <span style="font-size:12.5px;font-weight:700;color:var(--muted);white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>
+        <span style="font-size:12.5px;font-weight:700;color:${setComplete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>
         <button class="icon-btn" id="toggle-timer" style="padding:7px 9px;font-size:12.5px;">
           <span id="timer-badge">${ui.timerOn ? `⏱ ${m}:${s}` : '⏱ Off'}</span>
         </button>
       </div>
 
-      <div class="quiz-card" id="quiz-card-box">
+      <div class="card-dots">${qDotsHtml}</div>
+
+      <div class="quiz-card" id="quiz-card-box" style="${setComplete ? 'border-color:rgba(16,185,129,0.45);' : ''}">
         <div class="quiz-q">${q.q}</div>
         <div style="display:flex;flex-direction:column;gap:9px;">
           ${optsHtml}
@@ -1371,7 +1457,7 @@
 
       <div class="quiz-controls">
         <button class="sec-btn" id="q-prev" style="padding:14px 12px;" ${ui.qIdx === 0 ? 'disabled' : ''}>← Prev</button>
-        <button class="primary-btn" id="q-next" style="padding:14px 12px;" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>
+        ${rightControlBtn}
       </div>
     `;
   }
@@ -1607,7 +1693,9 @@
     document.querySelectorAll('[data-pick-qfilter]').forEach(btn => {
       btn.addEventListener('click', () => {
         ui.quizFilter = btn.dataset.pickQfilter;
-        ui.qIdx = 0;
+        const qs = getActiveQuestions();
+        const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
+        ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
         ui.secLeft = 120;
         ui.picker = null;
         startQuizTimerIfNeeded();
@@ -1622,6 +1710,27 @@
         renderApp();
       });
     });
+
+    const markVisibleRulesDone = () => {
+      const now = Date.now();
+      let newlyDone = 0;
+      DATA.triggers.forEach((t, idx) => {
+        if (ui.trigFilter === 'ALL' || t.sec === ui.trigFilter) {
+          const rid = 'r_' + idx;
+          if (!progress.doneRules[rid]) {
+            progress.doneRules[rid] = true;
+            progress.ruleMeta[rid] = now;
+            newlyDone++;
+          }
+        }
+      });
+      if (newlyDone > 0) recordStudyAction(newlyDone);
+      else saveProgress(true);
+      ui.picker = null;
+      renderApp();
+    };
+
+    document.getElementById('mark-rules-btn')?.addEventListener('click', markVisibleRulesDone);
 
     document.getElementById('mark-deck-btn')?.addEventListener('click', () => {
       const cards = getActiveCards();
@@ -1720,9 +1829,41 @@
           }
         });
       }
+
+      document.querySelectorAll('[data-toggle-rule]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const rid = btn.dataset.toggleRule;
+          if (progress.doneRules[rid]) delete progress.doneRules[rid];
+          else progress.doneRules[rid] = true;
+          progress.ruleMeta[rid] = Date.now();
+          if (progress.doneRules[rid]) recordStudyAction(1);
+          else saveProgress(true);
+          renderApp();
+        });
+      });
+
+      document.getElementById('mark-rules-inline-btn')?.addEventListener('click', markVisibleRulesDone);
+
+      document.getElementById('next-trigsec-btn')?.addEventListener('click', () => {
+        const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+        const pos = secs.indexOf(ui.trigFilter);
+        if (pos >= 0 && pos < secs.length - 1) {
+          ui.trigFilter = secs[pos + 1];
+          renderApp();
+        }
+      });
     }
 
     if (ui.tab === 'quiz') {
+      document.querySelectorAll('[data-qdot]').forEach(dot => {
+        dot.addEventListener('click', () => {
+          ui.qIdx = Number(dot.dataset.qdot);
+          ui.secLeft = 120;
+          startQuizTimerIfNeeded();
+          renderApp();
+        });
+      });
+
       document.getElementById('toggle-timer')?.addEventListener('click', () => {
         ui.timerOn = !ui.timerOn;
         ui.secLeft = 120;
@@ -1775,6 +1916,20 @@
         const qs = getActiveQuestions();
         if (ui.qIdx < qs.length - 1) {
           ui.qIdx++;
+          ui.secLeft = 120;
+          startQuizTimerIfNeeded();
+          renderApp();
+        }
+      });
+
+      document.getElementById('next-qsec-btn')?.addEventListener('click', () => {
+        const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+        const pos = secs.indexOf(ui.quizFilter);
+        if (pos >= 0 && pos < secs.length - 1) {
+          ui.quizFilter = secs[pos + 1];
+          const qs = getActiveQuestions();
+          const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
+          ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
           ui.secLeft = 120;
           startQuizTimerIfNeeded();
           renderApp();

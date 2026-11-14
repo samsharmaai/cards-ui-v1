@@ -369,6 +369,11 @@ html, body {
   border-color: var(--success);
 }
 
+.cdot.wrong {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
 .cdot.current {
   border-color: var(--primary);
   box-shadow: 0 0 0 1.5px var(--primary);
