@@ -747,4 +747,48 @@ html, body {
   font-size: 14.5px;
   line-height: 1.46;
   color: var(--text);
+  white-space: pre-line;
+}
+
+.principle-razor {
+  background: rgba(245, 158, 11, 0.11);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-left: 4px solid var(--warn);
+  padding: 11px 14px;
+  border-radius: 12px;
+}
+
+.q-jump-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  gap: 6px;
+}
+
+.q-jump-pill {
+  padding: 7px 4px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+
+.q-jump-pill.done {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.q-jump-pill.wrong {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: var(--danger);
+}
+
+.q-jump-pill.current {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1.5px var(--primary);
+  color: var(--text);
 }

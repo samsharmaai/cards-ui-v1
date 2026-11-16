@@ -3,10 +3,11 @@
   const LS_STATE = 'pd_progress_v1';
   const LS_THEME = 'pd_theme_v1';
   const LS_SYNC = 'pd_sync_cfg_v1';
+  const LS_UI = 'pd_ui_state_v1';
   const SYNC_FILENAME = 'cadence_sync_v1.json';
   const FIREBASE_PROJECT_ID = 'cadence-deck';
   const FIREBASE_COLLECTION = 'cadence';
-  const IDLE_LIMIT_MS = 90000;
+  const IDLE_LIMIT_MS = 60000;
 
   let pendingPairCode = null;
   if (window.location.hash && window.location.hash.includes('pair=')) {
@@ -27,6 +28,7 @@
 
   let progress = loadProgress();
   let lastActiveAt = Date.now();
+  let windowFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
   let unsavedSecTicks = 0;
 
   let ui = {
@@ -52,6 +54,31 @@
     picker: null
   };
 
+  function saveUiState() {
+    if (!DATA) return;
+    try {
+      localStorage.setItem(LS_UI, JSON.stringify({
+        tab: ui.tab,
+        deckIdx: ui.deckIdx,
+        cardIdx: ui.cardIdx,
+        trigFilter: ui.trigFilter,
+        quizFilter: ui.quizFilter,
+        qIdx: ui.qIdx,
+        pIdx: ui.pIdx,
+        timerOn: ui.timerOn
+      }));
+    } catch (_) {}
+  }
+
+  function loadSavedUiState() {
+    try {
+      const raw = localStorage.getItem(LS_UI);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   if (localStorage.getItem(LS_THEME) === 'light') {
     document.body.classList.add('light');
   }
@@ -67,7 +94,12 @@
       }
       if (swReloading) return;
       swReloading = true;
-      try { if (DATA) saveProgress(false); } catch (_) {}
+      try {
+        if (DATA) {
+          saveUiState();
+          saveProgress(false);
+        }
+      } catch (_) {}
       window.location.reload();
     });
     window.addEventListener('load', () => {
@@ -310,34 +342,54 @@
 
   function markUserInteraction() {
     lastActiveAt = Date.now();
+    windowFocused = true;
   }
 
   ['pointerdown', 'touchstart', 'keydown', 'scroll'].forEach(evt => {
     window.addEventListener(evt, markUserInteraction, { passive: true, capture: true });
   });
 
+  window.addEventListener('focus', () => {
+    windowFocused = true;
+    lastActiveAt = Date.now();
+    if (DATA && syncCfg && (Date.now() - lastSyncPullAt > 20000)) {
+      syncWithCloud({ silent: true });
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    windowFocused = false;
+    if (DATA) saveUiState();
+    if (unsavedSecTicks > 0) saveProgress(false);
+  });
+
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      windowFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
       lastActiveAt = Date.now();
       if (swReg) swReg.update().catch(() => {});
       if (DATA && syncCfg && (Date.now() - lastSyncPullAt > 15000)) {
         syncWithCloud({ silent: true });
       }
     } else {
+      windowFocused = false;
+      if (DATA) saveUiState();
       if (unsavedSecTicks > 0) saveProgress(false);
       if (syncDirty && syncCfg) flushCloudPushKeepalive();
     }
   });
 
   window.addEventListener('pagehide', () => {
+    if (DATA) saveUiState();
     if (unsavedSecTicks > 0) saveProgress(false);
     if (syncDirty && syncCfg) flushCloudPushKeepalive();
   });
 
-  // Silent background study-time tracker (never renders ticking seconds)
+  // Silent background study-time tracker (pauses immediately on tab switch, unfocused window, or 60s idle)
   setInterval(() => {
     if (!DATA) return;
     if (document.visibilityState !== 'visible') return;
+    if (!windowFocused || (typeof document.hasFocus === 'function' && !document.hasFocus())) return;
     if ((Date.now() - lastActiveAt) >= IDLE_LIMIT_MS) return;
 
     const tk = localDateKey();
@@ -654,7 +706,24 @@
       if (!silent) ui.syncMsg = '✓ Synced with Firebase!';
 
       if (isInitial && afterSig !== beforeSig) {
-        jumpToResumeTarget();
+        const curCards = getActiveCards();
+        if (typeof ui.deckIdx === 'number' && curCards[ui.cardIdx] && progress.doneCards[curCards[ui.cardIdx].id]) {
+          const cardTarget = findCurrentTarget();
+          ui.deckIdx = cardTarget.deckIdx;
+          ui.cardIdx = cardTarget.cardIdx;
+          ui.flipped = false;
+        }
+        const curQs = getActiveQuestions();
+        if (ui.quizFilter !== 'MISSED' && curQs[ui.qIdx] && progress.answers[curQs[ui.qIdx].id] !== undefined) {
+          const qt = findQuizResumeTarget();
+          ui.quizFilter = qt.quizFilter;
+          ui.qIdx = qt.qIdx;
+        }
+        if (DATA && Array.isArray(DATA.principles) && DATA.principles[ui.pIdx] && progress.donePrinciples[DATA.principles[ui.pIdx].id]) {
+          const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
+          if (nextP !== -1) ui.pIdx = nextP;
+        }
+        saveUiState();
       }
 
       const activeId = document.activeElement && document.activeElement.id;
@@ -683,15 +752,88 @@
     await syncWithCloud({ silent: true, isInitial: true });
   }
 
-  function jumpToResumeTarget() {
-    const target = findCurrentTarget();
-    ui.deckIdx = target.deckIdx;
-    ui.cardIdx = target.cardIdx;
+  function getQuizSets() {
+    if (!DATA || !Array.isArray(DATA.questions)) return [];
+    const seen = new Set();
+    const sets = [];
+    DATA.questions.forEach(q => {
+      const s = q.set || q.sec;
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        sets.push(s);
+      }
+    });
+    return sets;
+  }
+
+  function findQuizResumeTarget() {
+    if (!DATA || !Array.isArray(DATA.questions) || !DATA.questions.length) {
+      return { quizFilter: 'ALL', qIdx: 0 };
+    }
+    const sets = getQuizSets();
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i];
+      const qs = DATA.questions.filter(q => (q.set || q.sec) === s);
+      const openIdx = qs.findIndex(q => progress.answers[q.id] === undefined);
+      if (openIdx !== -1) {
+        return { quizFilter: s, qIdx: openIdx };
+      }
+    }
+    return { quizFilter: 'ALL', qIdx: 0 };
+  }
+
+  function jumpToResumeTarget(restoreSavedUi = false) {
+    const cardTarget = findCurrentTarget();
+    const quizTarget = findQuizResumeTarget();
+    ui.deckIdx = cardTarget.deckIdx;
+    ui.cardIdx = cardTarget.cardIdx;
     ui.flipped = false;
+    ui.quizFilter = quizTarget.quizFilter;
+    ui.qIdx = quizTarget.qIdx;
     if (DATA && Array.isArray(DATA.principles) && DATA.principles.length) {
       const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
       ui.pIdx = nextP !== -1 ? nextP : 0;
     }
+
+    if (restoreSavedUi) {
+      const saved = loadSavedUiState();
+      if (saved && typeof saved === 'object') {
+        if (['cards', 'triggers', 'quiz', 'principles'].includes(saved.tab)) {
+          ui.tab = saved.tab;
+        }
+        if (typeof saved.timerOn === 'boolean') {
+          ui.timerOn = saved.timerOn;
+        }
+        if (typeof saved.trigFilter === 'string') {
+          ui.trigFilter = saved.trigFilter;
+        }
+        if (saved.deckIdx === 'flagged' || (typeof saved.deckIdx === 'number' && DATA.decks[saved.deckIdx])) {
+          ui.deckIdx = saved.deckIdx;
+          const cards = getActiveCards();
+          if (typeof saved.cardIdx === 'number' && saved.cardIdx >= 0 && saved.cardIdx < cards.length) {
+            ui.cardIdx = saved.cardIdx;
+          }
+        }
+        if (typeof saved.pIdx === 'number' && DATA.principles && saved.pIdx >= 0 && saved.pIdx < DATA.principles.length) {
+          ui.pIdx = saved.pIdx;
+        }
+        const validSets = getQuizSets();
+        if (saved.quizFilter === 'ALL' || saved.quizFilter === 'MISSED' || validSets.includes(saved.quizFilter)) {
+          ui.quizFilter = saved.quizFilter;
+          const qs = getActiveQuestions();
+          if (typeof saved.qIdx === 'number' && saved.qIdx >= 0 && saved.qIdx < qs.length) {
+            // If saved on ALL Q1 when Q1 is already answered, jump to next unanswered instead of Q1
+            if (ui.quizFilter === 'ALL' && saved.qIdx === 0 && qs[0] && progress.answers[qs[0].id] !== undefined) {
+              const openAll = qs.findIndex(item => progress.answers[item.id] === undefined);
+              ui.qIdx = openAll !== -1 ? openAll : 0;
+            } else {
+              ui.qIdx = saved.qIdx;
+            }
+          }
+        }
+      }
+    }
+    saveUiState();
   }
 
   function renderLock(errMsg = '') {
@@ -732,7 +874,7 @@
       try {
         DATA = await unlockWithPasscode(val);
         if (remember) localStorage.setItem(LS_KEY, val.trim());
-        jumpToResumeTarget();
+        jumpToResumeTarget(true);
         ui.didInitialResume = true;
         startQuizTimerIfNeeded();
         renderApp();
@@ -760,7 +902,7 @@
     if (ui.quizFilter === 'MISSED') {
       return DATA.questions.filter(q => progress.missedQs[q.id]);
     }
-    return DATA.questions.filter(q => q.sec === ui.quizFilter);
+    return DATA.questions.filter(q => (q.set || q.sec) === ui.quizFilter);
   }
 
   function startQuizTimerIfNeeded() {
@@ -770,6 +912,8 @@
     const cur = qs[ui.qIdx];
     if (!cur || progress.answers[cur.id] !== undefined) return;
     ui.timerHandle = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (!windowFocused || (typeof document.hasFocus === 'function' && !document.hasFocus())) return;
       if (ui.secLeft > 0) {
         ui.secLeft--;
         const el = document.getElementById('timer-badge');
@@ -950,10 +1094,35 @@
       const missedCount = Object.values(progress.missedQs).filter(Boolean).length;
       const allAnswered = DATA.questions.filter(q => progress.answers[q.id] !== undefined).length;
       const allDone = DATA.questions.length > 0 && allAnswered === DATA.questions.length;
-      const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+      const sets = getQuizSets();
+      const activeQs = getActiveQuestions();
+      const activeLabel = ui.quizFilter === 'ALL'
+        ? 'All Sections'
+        : (ui.quizFilter === 'MISSED' ? 'Missed Items' : ui.quizFilter);
 
-      const secRows = secs.map(s => {
-        const list = DATA.questions.filter(q => q.sec === s);
+      const qPillsHtml = activeQs.length
+        ? `
+          <div class="day-log-row" style="gap:8px;">
+            <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.03em;">QUESTIONS IN ${activeLabel.toUpperCase()} (TAP TO JUMP)</div>
+            <div class="q-jump-grid">
+              ${activeQs.map((item, idx) => {
+                const ans = progress.answers[item.id];
+                let cls = 'q-jump-pill';
+                let mark = '';
+                if (ans !== undefined) {
+                  if (ans === item.ans) { cls += ' done'; mark = '✓ '; }
+                  else { cls += ' wrong'; mark = '✗ '; }
+                }
+                if (idx === ui.qIdx) cls += ' current';
+                return `<button class="${cls}" data-pick-qidx="${idx}">${mark}${idx + 1}</button>`;
+              }).join('')}
+            </div>
+          </div>
+        `
+        : '';
+
+      const setRows = sets.map(s => {
+        const list = DATA.questions.filter(q => (q.set || q.sec) === s);
         const ansCnt = list.filter(q => progress.answers[q.id] !== undefined).length;
         const complete = list.length > 0 && ansCnt === list.length;
         const active = ui.quizFilter === s;
@@ -974,6 +1143,7 @@
               <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
             </div>
             <div class="picker-list">
+              ${qPillsHtml}
               <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''} ${allDone && ui.quizFilter !== 'ALL' ? 'done-item' : ''}" data-pick-qfilter="ALL">
                 <div style="font-size:14.5px;font-weight:700;">${allDone ? '✓ ' : (ui.quizFilter === 'ALL' ? '▶ ' : '')}All Sections</div>
                 <span style="font-size:13px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
@@ -982,7 +1152,7 @@
                 <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'MISSED' ? '▶ ' : ''}🔁 Missed Items</div>
                 <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${missedCount}</span>
               </button>
-              ${secRows}
+              ${setRows}
             </div>
           </div>
         </div>
@@ -1135,7 +1305,10 @@
   async function forceAppRefresh() {
     if (swReloading) return;
     try {
-      if (DATA) saveProgress(false);
+      if (DATA) {
+        saveUiState();
+        saveProgress(false);
+      }
       if (DATA && syncCfg && SESSION_PASS && navigator.onLine !== false) {
         await Promise.race([
           syncWithCloud({ silent: true }),
@@ -1156,6 +1329,7 @@
 
   function renderApp() {
     if (!DATA) return renderLock();
+    saveUiState();
     const root = document.getElementById('root');
     const totalCards = DATA.decks.reduce((s, d) => s + d.cards.length, 0);
     const totalDoneCards = DATA.decks.reduce((s, d) => s + deckDoneCount(d), 0);
@@ -1408,12 +1582,14 @@
     const answeredList = qs.filter(item => progress.answers[item.id] !== undefined);
     const rightCount = answeredList.filter(item => progress.answers[item.id] === item.ans).length;
     const setComplete = ui.quizFilter !== 'MISSED' && qs.length > 0 && answeredList.length === qs.length;
+    const hasOpenAnywhere = DATA.questions.some(item => progress.answers[item.id] === undefined);
+    const showResumeBtn = chosen !== undefined && ui.quizFilter !== 'MISSED' && hasOpenAnywhere;
     const m = Math.floor(ui.secLeft / 60);
     const s = String(ui.secLeft % 60).padStart(2, '0');
 
-    const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
-    const curSecPos = secs.indexOf(ui.quizFilter);
-    const nextQuizSec = curSecPos >= 0 && curSecPos < secs.length - 1 ? secs[curSecPos + 1] : null;
+    const sets = getQuizSets();
+    const curSecPos = sets.indexOf(ui.quizFilter);
+    const nextQuizSec = curSecPos >= 0 && curSecPos < sets.length - 1 ? sets[curSecPos + 1] : null;
 
     const qProgressHtml = qs.length <= 20
       ? `<div class="card-dots">${qs.map((item, idx) => {
@@ -1449,7 +1625,7 @@
           <span class="dropdown-btn-label" style="${setComplete ? 'color:var(--success);' : ''}">${setComplete ? '✓ ' : ''}${activeFilterLabel} • Q ${ui.qIdx + 1}/${qs.length}</span>
           <span class="dropdown-caret">▾</span>
         </button>
-        <span style="font-size:12.5px;font-weight:700;color:${setComplete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>
+        ${showResumeBtn ? `<button class="icon-btn" id="jump-quiz-open-btn" style="padding:7px 9px;font-size:12px;border-color:var(--primary);color:var(--primary);">▶ Next</button>` : `<span style="font-size:12.5px;font-weight:700;color:${setComplete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>`}
         <button class="icon-btn" id="toggle-timer" style="padding:7px 9px;font-size:12.5px;">
           <span id="timer-badge">${ui.timerOn ? `⏱ ${m}:${s}` : '⏱ Off'}</span>
         </button>
@@ -1509,6 +1685,16 @@
       <div style="font-size:14px;line-height:1.44;color:var(--text);">• ${tr}</div>
     `).join('');
 
+    const groundTruthText = p.groundTruth || p.intuition || '';
+    const razorHtml = p.razor
+      ? `
+        <div class="principle-razor">
+          <div style="font-size:12px;font-weight:800;color:var(--warn);margin-bottom:4px;letter-spacing:0.03em;">⚡ 5-SECOND MENTAL RAZOR</div>
+          <div style="font-size:14.5px;font-weight:700;line-height:1.42;color:var(--text);">${p.razor}</div>
+        </div>
+      `
+      : '';
+
     return `
       <div class="selector-bar">
         <button class="dropdown-btn" id="open-principle-picker" style="${allDone ? 'border-color:rgba(16,185,129,0.6);' : ''}">
@@ -1535,17 +1721,19 @@
         </div>
 
         <div style="background:var(--surface-2);border-left:4px solid var(--primary);padding:12px 14px;border-radius:12px;">
-          <div style="font-size:12px;font-weight:800;color:var(--primary);margin-bottom:4px;letter-spacing:0.03em;">💡 FIRST-PRINCIPLES INTUITION</div>
-          <div style="font-size:15px;line-height:1.48;color:var(--text);">${p.intuition}</div>
+          <div style="font-size:12px;font-weight:800;color:var(--primary);margin-bottom:4px;letter-spacing:0.03em;">⚛️ FIRST PRINCIPLES (STRIP AWAY THE JARGON)</div>
+          <div style="font-size:15px;line-height:1.48;color:var(--text);">${groundTruthText}</div>
         </div>
 
+        ${razorHtml}
+
         <div style="display:flex;flex-direction:column;gap:9px;">
-          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.04em;">⚙️ HOW THE PIECES FIT TOGETHER</div>
+          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.04em;">🧱 BUILD IT UP FROM ZERO</div>
           ${pillarsHtml}
         </div>
 
         <div class="box-avoid" style="display:flex;flex-direction:column;gap:7px;">
-          <div style="font-size:12px;font-weight:800;color:var(--danger);letter-spacing:0.03em;">🪤 BOUNDARY TRAPS &amp; EDGE CASES</div>
+          <div style="font-size:12px;font-weight:800;color:var(--danger);letter-spacing:0.03em;">🪤 WHERE ANALOGY THINKING FAILS</div>
           ${trapsHtml}
         </div>
       </div>
@@ -1727,6 +1915,16 @@
         const qs = getActiveQuestions();
         const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
         ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
+        ui.secLeft = 120;
+        ui.picker = null;
+        startQuizTimerIfNeeded();
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('[data-pick-qidx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.qIdx = Number(btn.dataset.pickQidx);
         ui.secLeft = 120;
         ui.picker = null;
         startQuizTimerIfNeeded();
@@ -1965,11 +2163,26 @@
         }
       });
 
+      document.getElementById('jump-quiz-open-btn')?.addEventListener('click', () => {
+        const curQs = getActiveQuestions();
+        const openInCur = curQs.findIndex(item => progress.answers[item.id] === undefined);
+        if (openInCur !== -1) {
+          ui.qIdx = openInCur;
+        } else {
+          const qt = findQuizResumeTarget();
+          ui.quizFilter = qt.quizFilter;
+          ui.qIdx = qt.qIdx;
+        }
+        ui.secLeft = 120;
+        startQuizTimerIfNeeded();
+        renderApp();
+      });
+
       document.getElementById('next-qsec-btn')?.addEventListener('click', () => {
-        const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
-        const pos = secs.indexOf(ui.quizFilter);
-        if (pos >= 0 && pos < secs.length - 1) {
-          ui.quizFilter = secs[pos + 1];
+        const sets = getQuizSets();
+        const pos = sets.indexOf(ui.quizFilter);
+        if (pos >= 0 && pos < sets.length - 1) {
+          ui.quizFilter = sets[pos + 1];
           const qs = getActiveQuestions();
           const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
           ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
@@ -2009,7 +2222,18 @@
 
       document.querySelectorAll('[data-jump-qsec]').forEach(btn => {
         btn.addEventListener('click', () => {
-          ui.quizFilter = btn.dataset.jumpQsec;
+          const baseSec = btn.dataset.jumpQsec;
+          const matchingSets = getQuizSets().filter(s => s === baseSec || s.startsWith(baseSec + ' •'));
+          let chosenSet = matchingSets[0] || baseSec;
+          for (let i = 0; i < matchingSets.length; i++) {
+            const candidate = matchingSets[i];
+            const hasOpen = DATA.questions.some(q => (q.set || q.sec) === candidate && progress.answers[q.id] === undefined);
+            if (hasOpen) {
+              chosenSet = candidate;
+              break;
+            }
+          }
+          ui.quizFilter = chosenSet;
           const qs = getActiveQuestions();
           const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
           ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
@@ -2205,7 +2429,7 @@
     if (saved) {
       try {
         DATA = await unlockWithPasscode(saved);
-        jumpToResumeTarget();
+        jumpToResumeTarget(true);
         ui.didInitialResume = true;
         startQuizTimerIfNeeded();
         renderApp();
