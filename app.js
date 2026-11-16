@@ -4,6 +4,8 @@
   const LS_THEME = 'pd_theme_v1';
   const LS_SYNC = 'pd_sync_cfg_v1';
   const SYNC_FILENAME = 'cadence_sync_v1.json';
+  const FIREBASE_PROJECT_ID = 'cadence-deck';
+  const FIREBASE_COLLECTION = 'cadence';
   const IDLE_LIMIT_MS = 90000;
 
   let pendingPairCode = null;
@@ -476,16 +478,16 @@
     return data;
   }
 
-  async function saveSyncCfgEncrypted(cfg) {
-    if (!cfg || !SESSION_PASS) {
-      localStorage.removeItem(LS_SYNC);
-      return;
-    }
-    const enc = await encryptWithPasscode(cfg, SESSION_PASS, 100000);
-    localStorage.setItem(LS_SYNC, JSON.stringify(enc));
+  async function getFirebaseDocUrl() {
+    const bytes = new TextEncoder().encode('cadence-sync-doc:' + SESSION_PASS.trim());
+    const hashBuf = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = Array.from(new Uint8Array(hashBuf))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    return `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/${FIREBASE_COLLECTION}/${hex}`;
   }
 
-  async function loadSyncCfgDecrypted() {
+  async function loadLegacyGistCfg() {
     if (!SESSION_PASS) return null;
     try {
       const raw = localStorage.getItem(LS_SYNC);
@@ -495,6 +497,28 @@
       if (cfg && cfg.token && cfg.gistId) return cfg;
     } catch (_) {}
     return null;
+  }
+
+  async function pullLegacyGistOnce() {
+    const legacy = await loadLegacyGistCfg();
+    if (!legacy) return;
+    try {
+      const res = await fetch(`https://api.github.com/gists/${legacy.gistId}`, {
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${legacy.token}`
+        }
+      });
+      if (!res.ok) return;
+      const gist = await res.json();
+      const content = gist.files && gist.files[SYNC_FILENAME] && gist.files[SYNC_FILENAME].content;
+      if (content) {
+        const remoteData = await decryptJsonWithPasscode(JSON.parse(content), SESSION_PASS);
+        progress = mergeProgress(progress, remoteData);
+        saveProgress(false);
+      }
+    } catch (_) {}
   }
 
   function syncBtnLabel() {
@@ -528,18 +552,18 @@
   async function flushCloudPushKeepalive() {
     if (!syncCfg || !SESSION_PASS || syncInFlight) return;
     try {
+      const docUrl = await getFirebaseDocUrl();
       const encOut = await encryptWithPasscode(progress, SESSION_PASS, 100000);
       syncDirty = false;
-      fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
+      fetch(docUrl, {
         method: 'PATCH',
         keepalive: true,
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'Authorization': `Bearer ${syncCfg.token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          files: { [SYNC_FILENAME]: { content: JSON.stringify(encOut) } }
+          fields: {
+            payload: { stringValue: JSON.stringify(encOut) },
+            updatedAt: { integerValue: String(Date.now()) }
+          }
         })
       }).catch(() => { syncDirty = true; });
     } catch (_) {}
@@ -554,15 +578,11 @@
     else updateSyncHeaderBtn();
 
     try {
-      const getRes = await fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
-        cache: 'no-store',
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'Authorization': `Bearer ${syncCfg.token}`
-        }
-      });
-      if (!getRes.ok) throw new Error(`HTTP ${getRes.status}`);
-      const gist = await getRes.json();
+      const docUrl = await getFirebaseDocUrl();
+      const getRes = await fetch(docUrl, { cache: 'no-store' });
+      if (!getRes.ok && getRes.status !== 404) {
+        throw new Error(`HTTP ${getRes.status}`);
+      }
 
       const beforeSig = JSON.stringify([
         progress.doneCards,
@@ -572,26 +592,28 @@
         progress.doneDays
       ]);
 
-      const remoteContent = gist.files && gist.files[SYNC_FILENAME] && gist.files[SYNC_FILENAME].content;
-      if (remoteContent) {
-        try {
-          const remoteEnc = JSON.parse(remoteContent);
-          const remoteData = await decryptJsonWithPasscode(remoteEnc, SESSION_PASS);
-          progress = mergeProgress(progress, remoteData);
-          saveProgress(false);
-        } catch (_) {}
+      if (getRes.ok) {
+        const doc = await getRes.json();
+        const payloadStr = doc && doc.fields && doc.fields.payload && doc.fields.payload.stringValue;
+        if (payloadStr) {
+          try {
+            const remoteEnc = JSON.parse(payloadStr);
+            const remoteData = await decryptJsonWithPasscode(remoteEnc, SESSION_PASS);
+            progress = mergeProgress(progress, remoteData);
+            saveProgress(false);
+          } catch (_) {}
+        }
       }
 
       const encOut = await encryptWithPasscode(progress, SESSION_PASS, 100000);
-      const patchRes = await fetch(`https://api.github.com/gists/${syncCfg.gistId}`, {
+      const patchRes = await fetch(docUrl, {
         method: 'PATCH',
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'Authorization': `Bearer ${syncCfg.token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          files: { [SYNC_FILENAME]: { content: JSON.stringify(encOut) } }
+          fields: {
+            payload: { stringValue: JSON.stringify(encOut) },
+            updatedAt: { integerValue: String(Date.now()) }
+          }
         })
       });
       if (!patchRes.ok) throw new Error(`HTTP ${patchRes.status}`);
@@ -608,13 +630,14 @@
       ui.lastSyncedAt = Date.now();
       syncDirty = false;
       ui.syncStatus = 'ok';
+      if (!silent) ui.syncMsg = '✓ Synced with Firebase!';
 
       if (isInitial && afterSig !== beforeSig) {
         jumpToResumeTarget();
       }
 
       const activeId = document.activeElement && document.activeElement.id;
-      const isTyping = activeId === 'trig-search' || activeId === 'sync-key-input' || activeId === 'manual-sync-input';
+      const isTyping = activeId === 'trig-search' || activeId === 'manual-sync-input';
       if ((!silent || ui.showSyncDrawer || afterSig !== beforeSig) && !isTyping) {
         renderApp();
       } else {
@@ -622,7 +645,7 @@
       }
     } catch (_) {
       ui.syncStatus = 'err';
-      if (!silent) ui.syncMsg = 'Sync error — check key or connection.';
+      if (!silent) ui.syncMsg = 'Sync error — check connection or Firestore rules.';
       if (!silent || ui.showSyncDrawer) renderApp();
       else updateSyncHeaderBtn();
     } finally {
@@ -630,96 +653,13 @@
     }
   }
 
-  async function setupCloudSync(rawInput) {
-    const trimmed = (rawInput || '').trim();
-    if (!trimmed || !SESSION_PASS) return;
-
-    ui.syncStatus = 'syncing';
-    ui.syncMsg = 'Connecting encrypted sync...';
-    renderApp();
-
-    try {
-      let pairCode = null;
-      if (trimmed.includes('#pair=')) {
-        const hashPart = trimmed.split('#')[1] || '';
-        pairCode = new URLSearchParams(hashPart).get('pair');
-      } else if (trimmed.startsWith('PAIR1:')) {
-        pairCode = trimmed.slice(6).trim();
-      }
-
-      if (pairCode) {
-        const encObj = JSON.parse(fromUrlCode(pairCode));
-        const decoded = await decryptJsonWithPasscode(encObj, SESSION_PASS);
-        if (!decoded || !decoded.t || !decoded.g) throw new Error('Bad pairing code');
-        syncCfg = { token: decoded.t, gistId: decoded.g };
-        await saveSyncCfgEncrypted(syncCfg);
-        ui.syncMsg = '✓ Device paired & synced!';
-        await syncWithCloud({ silent: false, isInitial: true });
-        return;
-      }
-
-      const token = trimmed;
-      const listRes = await fetch('https://api.github.com/gists?per_page=50', {
-        cache: 'no-store',
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      if (!listRes.ok) throw new Error('Invalid token');
-      const gists = await listRes.json();
-      const existing = Array.isArray(gists)
-        ? gists.find(g => g && g.files && g.files[SYNC_FILENAME])
-        : null;
-
-      let gistId = existing ? existing.id : null;
-      if (!gistId) {
-        const encInit = await encryptWithPasscode(progress, SESSION_PASS, 100000);
-        const createRes = await fetch('https://api.github.com/gists', {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/vnd.github+json',
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            description: 'Cadence encrypted workspace sync',
-            public: false,
-            files: {
-              [SYNC_FILENAME]: { content: JSON.stringify(encInit) }
-            }
-          })
-        });
-        if (!createRes.ok) throw new Error('Could not create gist');
-        const created = await createRes.json();
-        gistId = created.id;
-      }
-
-      syncCfg = { token, gistId };
-      await saveSyncCfgEncrypted(syncCfg);
-      ui.syncMsg = '✓ Auto-Sync active! Copy your Pairing Link below to connect other devices in 1 tap.';
-      await syncWithCloud({ silent: false, isInitial: true });
-    } catch (_) {
-      ui.syncStatus = 'err';
-      ui.syncMsg = 'Could not connect — ensure your GitHub key has the "gist" scope.';
-      renderApp();
-    }
-  }
-
   async function initSyncAfterUnlock() {
     if (!SESSION_PASS) return;
-    if (pendingPairCode) {
-      const code = pendingPairCode;
-      pendingPairCode = null;
-      ui.showSyncDrawer = true;
-      await setupCloudSync('PAIR1:' + code);
-      return;
-    }
-    syncCfg = await loadSyncCfgDecrypted();
-    if (syncCfg) {
-      updateSyncHeaderBtn();
-      syncWithCloud({ silent: true, isInitial: true });
-    }
+    pendingPairCode = null;
+    syncCfg = { mode: 'firebase' };
+    updateSyncHeaderBtn();
+    await pullLegacyGistOnce();
+    await syncWithCloud({ silent: true, isInitial: true });
   }
 
   function jumpToResumeTarget() {
@@ -1080,48 +1020,20 @@
       ? `<div style="background:var(--surface-2);border:1px solid ${ui.syncStatus === 'err' ? 'var(--danger)' : 'var(--primary)'};border-radius:12px;padding:10px 12px;font-size:13.5px;line-height:1.4;color:${ui.syncStatus === 'err' ? 'var(--danger)' : 'var(--text)'};">${ui.syncMsg}</div>`
       : '';
 
-    const autoSyncHtml = syncCfg
-      ? `
-        <div class="day-log-row" style="gap:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <span style="font-size:14.5px;font-weight:800;color:var(--success);">🟢 Auto-Sync Active</span>
-            <span style="font-size:12.5px;font-weight:600;color:var(--muted);">${ui.syncStatus === 'syncing' ? 'Syncing...' : `Synced • ${lastTimeStr}`}</span>
-          </div>
-          <div style="font-size:13px;color:var(--muted);line-height:1.4;">
-            Cards, saved items, practice answers, checklist days, and daily streaks merge automatically across your devices.
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <button class="primary-btn" id="sync-now-btn" style="padding:11px 10px;font-size:14px;" ${ui.syncStatus === 'syncing' ? 'disabled' : ''}>
-              ${ui.syncStatus === 'syncing' ? 'Syncing...' : '↻ Sync Now'}
-            </button>
-            <button class="sec-btn" id="copy-pair-btn" style="padding:11px 10px;font-size:14px;">
-              🔗 Pairing Link
-            </button>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:2px;">
-            <span style="font-size:12px;color:var(--muted);">Open Pairing Link on another device for 1-tap setup.</span>
-            <button class="icon-btn" id="sync-disconnect-btn" style="padding:5px 9px;font-size:12px;color:var(--danger);border-color:rgba(239,68,68,0.4);">Disconnect</button>
-          </div>
+    const autoSyncHtml = `
+      <div class="day-log-row" style="gap:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <span style="font-size:14.5px;font-weight:800;color:var(--success);">🟢 Firebase Auto-Sync Active</span>
+          <span style="font-size:12.5px;font-weight:600;color:var(--muted);">${ui.syncStatus === 'syncing' ? 'Syncing...' : `Synced • ${lastTimeStr}`}</span>
         </div>
-      `
-      : `
-        <div class="day-log-row" style="gap:10px;">
-          <div style="font-size:14.5px;font-weight:800;">☁ Automatic Cross-Device Sync</div>
-          <div style="font-size:13px;color:var(--muted);line-height:1.42;">
-            One-time 20-second setup using a private, encrypted GitHub Gist on your own account:
-          </div>
-          <a href="https://github.com/settings/tokens/new?scopes=gist&description=Cadence+Sync" target="_blank" rel="noopener noreferrer" class="sec-btn" style="display:block;text-align:center;text-decoration:none;padding:11px 12px;font-size:14px;">
-            1. Create Free Gist Key on GitHub ↗
-          </a>
-          <div style="font-size:12px;color:var(--muted);line-height:1.35;">
-            On GitHub, scroll down &amp; tap <strong>Generate token</strong>, then paste the <code>ghp_...</code> key (or a Pairing Link from another device) below:
-          </div>
-          <input id="sync-key-input" type="password" class="text-input" placeholder="Paste ghp_... key or Pairing Link" style="padding:11px 13px;font-size:14.5px;border-radius:12px;" autocomplete="off" />
-          <button class="primary-btn" id="sync-connect-btn" style="padding:12px;font-size:15px;" ${ui.syncStatus === 'syncing' ? 'disabled' : ''}>
-            ${ui.syncStatus === 'syncing' ? 'Connecting...' : '2. Enable Auto-Sync'}
-          </button>
+        <div style="font-size:13px;color:var(--muted);line-height:1.4;">
+          Automatic across any phone or laptop — just open Cadence and enter your access key. No pairing links or extra keys needed.
         </div>
-      `;
+        <button class="primary-btn" id="sync-now-btn" style="padding:11px 10px;font-size:14px;width:100%;" ${ui.syncStatus === 'syncing' ? 'disabled' : ''}>
+          ${ui.syncStatus === 'syncing' ? 'Syncing...' : '↻ Sync Now'}
+        </button>
+      </div>
+    `;
 
     const pasteBoxHtml = ui.showPasteBox
       ? `
@@ -1612,42 +1524,12 @@
       }
     });
 
-    document.getElementById('sync-connect-btn')?.addEventListener('click', () => {
-      const inp = document.getElementById('sync-key-input');
-      if (inp && inp.value.trim()) {
-        setupCloudSync(inp.value.trim());
-      }
-    });
-
     document.getElementById('sync-now-btn')?.addEventListener('click', () => {
       ui.syncMsg = '';
       syncWithCloud({ silent: false });
     });
 
     document.getElementById('hard-refresh-btn')?.addEventListener('click', forceAppRefresh);
-
-    document.getElementById('copy-pair-btn')?.addEventListener('click', async () => {
-      if (!syncCfg || !SESSION_PASS) return;
-      try {
-        const encPair = await encryptWithPasscode({ t: syncCfg.token, g: syncCfg.gistId }, SESSION_PASS, 100000);
-        const code = toUrlCode(JSON.stringify(encPair));
-        const link = `${window.location.origin}${window.location.pathname}#pair=${code}`;
-        await navigator.clipboard.writeText(link);
-        ui.syncMsg = '✓ Pairing Link copied! Open it on your other device for 1-tap encrypted sync.';
-        renderApp();
-      } catch (_) {
-        ui.syncMsg = 'Could not copy automatically — check clipboard permissions.';
-        renderApp();
-      }
-    });
-
-    document.getElementById('sync-disconnect-btn')?.addEventListener('click', () => {
-      syncCfg = null;
-      localStorage.removeItem(LS_SYNC);
-      ui.syncStatus = 'idle';
-      ui.syncMsg = 'Disconnected auto-sync on this device.';
-      renderApp();
-    });
 
     document.getElementById('copy-manual-sync-btn')?.addEventListener('click', async () => {
       if (!SESSION_PASS) return;
@@ -1673,10 +1555,6 @@
       const inp = document.getElementById('manual-sync-input');
       const raw = (inp ? inp.value : '').trim();
       if (!raw || !SESSION_PASS) return;
-      if (raw.includes('#pair=') || raw.startsWith('PAIR1:')) {
-        await setupCloudSync(raw);
-        return;
-      }
       try {
         const clean = raw.startsWith('SYNC1:') ? raw.slice(6).trim() : raw;
         const encObj = JSON.parse(fromUrlCode(clean));
