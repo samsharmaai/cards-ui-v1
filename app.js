@@ -38,6 +38,7 @@
     trigSearch: '',
     quizFilter: 'ALL',
     qIdx: 0,
+    pIdx: 0,
     timerOn: true,
     secLeft: 120,
     timerHandle: null,
@@ -110,6 +111,7 @@
       flaggedCards: parsed.flaggedCards || {},
       doneCards: parsed.doneCards || {},
       doneRules: parsed.doneRules || {},
+      donePrinciples: parsed.donePrinciples || {},
       answers: parsed.answers || {},
       missedQs: parsed.missedQs || {},
       doneDays: parsed.doneDays || {},
@@ -117,6 +119,7 @@
       dailySeconds: parsed.dailySeconds || {},
       cardMeta: parsed.cardMeta || {},
       ruleMeta: parsed.ruleMeta || {},
+      principleMeta: parsed.principleMeta || {},
       qMeta: parsed.qMeta || {},
       dayMeta: parsed.dayMeta || {},
       lastDeckIdx: parsed.lastDeckIdx || 0,
@@ -171,6 +174,22 @@
       } else {
         if (a.doneRules[k] || b.doneRules[k]) out.doneRules[k] = true;
         if (ta) out.ruleMeta[k] = ta;
+      }
+    });
+
+    // Timestamp-aware merge for understood principles
+    Object.keys({ ...a.donePrinciples, ...b.donePrinciples, ...a.principleMeta, ...b.principleMeta }).forEach(k => {
+      const ta = a.principleMeta[k] || 0;
+      const tb = b.principleMeta[k] || 0;
+      if (ta > tb) {
+        if (a.donePrinciples[k]) out.donePrinciples[k] = true;
+        out.principleMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.donePrinciples[k]) out.donePrinciples[k] = true;
+        out.principleMeta[k] = tb;
+      } else {
+        if (a.donePrinciples[k] || b.donePrinciples[k]) out.donePrinciples[k] = true;
+        if (ta) out.principleMeta[k] = ta;
       }
     });
 
@@ -588,6 +607,7 @@
         progress.doneCards,
         progress.flaggedCards,
         progress.doneRules,
+        progress.donePrinciples,
         progress.answers,
         progress.doneDays
       ]);
@@ -622,6 +642,7 @@
         progress.doneCards,
         progress.flaggedCards,
         progress.doneRules,
+        progress.donePrinciples,
         progress.answers,
         progress.doneDays
       ]);
@@ -667,6 +688,10 @@
     ui.deckIdx = target.deckIdx;
     ui.cardIdx = target.cardIdx;
     ui.flipped = false;
+    if (DATA && Array.isArray(DATA.principles) && DATA.principles.length) {
+      const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
+      ui.pIdx = nextP !== -1 ? nextP : 0;
+    }
   }
 
   function renderLock(errMsg = '') {
@@ -967,14 +992,14 @@
     if (ui.picker === 'trig') {
       const secs = ['ALL', 'Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
       const curTargets = DATA.triggers
-        .map((t, idx) => ({ t, id: 'r_' + idx }))
+        .map((t, idx) => ({ t, id: t.id || ('r_' + idx) }))
         .filter(item => ui.trigFilter === 'ALL' || item.t.sec === ui.trigFilter);
       const canMarkRulesDone = curTargets.some(item => !progress.doneRules[item.id]);
 
       const rows = secs.map(s => {
         const indices = [];
         DATA.triggers.forEach((t, idx) => {
-          if (s === 'ALL' || t.sec === s) indices.push('r_' + idx);
+          if (s === 'ALL' || t.sec === s) indices.push(t.id || ('r_' + idx));
         });
         const doneCnt = indices.filter(id => !!progress.doneRules[id]).length;
         const complete = indices.length > 0 && doneCnt === indices.length;
@@ -997,6 +1022,39 @@
                 ${canMarkRulesDone ? `<button class="icon-btn" id="mark-rules-btn" style="padding:7px 10px;font-size:12.5px;">✓ Mark ${ui.trigFilter === 'ALL' ? 'All' : ui.trigFilter} Done</button>` : ''}
                 <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
               </div>
+            </div>
+            <div class="picker-list">
+              ${rows}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (ui.picker === 'principle') {
+      const list = DATA.principles || [];
+      const doneCnt = list.filter(p => !!progress.donePrinciples[p.id]).length;
+      const rows = list.map((p, idx) => {
+        const done = !!progress.donePrinciples[p.id];
+        const active = ui.pIdx === idx;
+        const prefix = done ? '✓ ' : (active ? '▶ ' : '');
+        return `
+          <button class="picker-item ${active ? 'active' : ''} ${done && !active ? 'done-item' : ''}" data-pick-principle="${idx}">
+            <div style="min-width:0;">
+              <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${prefix}${p.num}. ${p.title}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${p.sec}</div>
+            </div>
+            <span style="font-size:13px;font-weight:700;color:${done ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${done ? '✓' : '○'}</span>
+          </button>
+        `;
+      }).join('');
+
+      return `
+        <div class="drawer-backdrop" id="picker-backdrop">
+          <div class="drawer-sheet" role="dialog" aria-label="First Principles Modules">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:18px;font-weight:800;">First Principles (${doneCnt}/${list.length})</div>
+              <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
             </div>
             <div class="picker-list">
               ${rows}
@@ -1107,7 +1165,7 @@
     if (ui.tab === 'cards') mainHtml = renderCardsTab();
     else if (ui.tab === 'triggers') mainHtml = renderTriggersTab();
     else if (ui.tab === 'quiz') mainHtml = renderQuizTab();
-    else mainHtml = renderPlanTab();
+    else mainHtml = renderPrinciplesTab();
 
     root.innerHTML = `
       <div class="app-shell">
@@ -1147,9 +1205,9 @@
               <span style="font-size:18px;">🎯</span>
               <span>Practice</span>
             </button>
-            <button class="nav-tab ${ui.tab === 'plan' ? 'active' : ''}" data-tab="plan">
-              <span style="font-size:18px;">📅</span>
-              <span>Plan</span>
+            <button class="nav-tab ${ui.tab === 'principles' ? 'active' : ''}" data-tab="principles">
+              <span style="font-size:18px;">🧠</span>
+              <span>Principles</span>
             </button>
           </div>
         </nav>
@@ -1255,7 +1313,7 @@
 
   function renderTriggersTab() {
     const q = ui.trigSearch.toLowerCase().trim();
-    const indexed = DATA.triggers.map((t, idx) => ({ t, idx, id: 'r_' + idx }));
+    const indexed = DATA.triggers.map((t, idx) => ({ t, idx, id: t.id || ('r_' + idx) }));
     const secScope = indexed.filter(item => ui.trigFilter === 'ALL' || item.t.sec === ui.trigFilter);
     const secDoneCnt = secScope.filter(item => !!progress.doneRules[item.id]).length;
     const secComplete = secScope.length > 0 && secDoneCnt === secScope.length;
@@ -1357,15 +1415,19 @@
     const curSecPos = secs.indexOf(ui.quizFilter);
     const nextQuizSec = curSecPos >= 0 && curSecPos < secs.length - 1 ? secs[curSecPos + 1] : null;
 
-    const qDotsHtml = qs.map((item, idx) => {
-      let dCls = 'cdot';
-      const ans = progress.answers[item.id];
-      if (ans !== undefined) {
-        dCls += (ans === item.ans) ? ' done' : ' wrong';
-      }
-      if (idx === ui.qIdx) dCls += ' current';
-      return `<div class="${dCls}" data-qdot="${idx}"></div>`;
-    }).join('');
+    const qProgressHtml = qs.length <= 20
+      ? `<div class="card-dots">${qs.map((item, idx) => {
+          let dCls = 'cdot';
+          const ans = progress.answers[item.id];
+          if (ans !== undefined) {
+            dCls += (ans === item.ans) ? ' done' : ' wrong';
+          }
+          if (idx === ui.qIdx) dCls += ' current';
+          return `<div class="${dCls}" data-qdot="${idx}"></div>`;
+        }).join('')}</div>`
+      : `<div style="flex-shrink:0;width:100%;height:6px;border-radius:99px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;">
+           <div style="height:100%;width:${Math.round((answeredList.length / qs.length) * 100)}%;background:var(--success);transition:width .2s;"></div>
+         </div>`;
 
     const optsHtml = q.opts.map((opt, idx) => {
       let cls = 'opt-btn';
@@ -1393,7 +1455,7 @@
         </button>
       </div>
 
-      <div class="card-dots">${qDotsHtml}</div>
+      ${qProgressHtml}
 
       <div class="quiz-card" id="quiz-card-box" style="${setComplete ? 'border-color:rgba(16,185,129,0.45);' : ''}">
         <div class="quiz-q">${q.q}</div>
@@ -1417,39 +1479,81 @@
     `;
   }
 
-  function renderPlanTab() {
-    const doneCount = Object.keys(progress.doneDays).filter(k => progress.doneDays[k]).length;
-    const pct = Math.round((doneCount / DATA.plan.length) * 100);
+  function renderPrinciplesTab() {
+    const list = DATA.principles || [];
+    if (!list.length) return '';
+    if (ui.pIdx >= list.length) ui.pIdx = 0;
 
-    const rows = DATA.plan.map(p => {
-      const done = !!progress.doneDays[p.day];
-      const dIdx = DATA.decks.findIndex(d => d.id === p.deckId);
-      const linkedDeck = dIdx >= 0 ? DATA.decks[dIdx] : null;
-      const deckBadge = linkedDeck && isDeckComplete(linkedDeck) ? ' • ✓ Cards Done' : '';
-      return `
-        <div class="plan-item ${done ? 'done' : ''}">
-          <div class="plan-check" data-day="${p.day}">${done ? '✓' : ''}</div>
-          <div style="flex:1;cursor:pointer;" data-day="${p.day}">
-            <div style="font-size:12.5px;font-weight:700;color:var(--muted);">Day ${p.day} • ${p.date} • ${p.phase}${deckBadge}</div>
-            <div class="plan-topic" style="font-size:15.5px;font-weight:600;margin-top:3px;line-height:1.38;">${p.topic}</div>
-          </div>
-          ${dIdx >= 0 ? `<button class="icon-btn" data-open-deck="${dIdx}" style="padding:7px 10px;font-size:12.5px;align-self:center;">Deck →</button>` : ''}
-        </div>
-      `;
+    const p = list[ui.pIdx];
+    const isDone = !!progress.donePrinciples[p.id];
+    const doneTotal = list.filter(item => !!progress.donePrinciples[item.id]).length;
+    const allDone = doneTotal === list.length;
+
+    const dIdx = DATA.decks.findIndex(d => d.id === p.deckId);
+
+    const pDotsHtml = list.map((item, idx) => {
+      let dCls = 'cdot';
+      if (progress.donePrinciples[item.id]) dCls += ' done';
+      if (idx === ui.pIdx) dCls += ' current';
+      return `<div class="${dCls}" data-pdot="${idx}"></div>`;
     }).join('');
 
+    const pillarsHtml = (p.pillars || []).map(pil => `
+      <div class="principle-pillar">
+        <div class="principle-pillar-title">${pil.label}</div>
+        <div class="principle-pillar-desc">${pil.desc}</div>
+      </div>
+    `).join('');
+
+    const trapsHtml = (p.traps || []).map(tr => `
+      <div style="font-size:14px;line-height:1.44;color:var(--text);">• ${tr}</div>
+    `).join('');
+
     return `
-      <div class="trigger-card" style="flex-shrink:0;padding:13px 15px;gap:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:15.5px;font-weight:700;">Checklist Progress</span>
-          <span style="font-size:15.5px;font-weight:800;color:var(--primary);">${pct}% (${doneCount}/${DATA.plan.length})</span>
+      <div class="selector-bar">
+        <button class="dropdown-btn" id="open-principle-picker" style="${allDone ? 'border-color:rgba(16,185,129,0.6);' : ''}">
+          <span class="dropdown-btn-label" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}${p.num}/${list.length} • ${p.title}</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+        <span style="font-size:12.5px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${doneTotal}/${list.length}</span>
+      </div>
+
+      <div class="card-dots">${pDotsHtml}</div>
+
+      <div class="quiz-card" id="principle-card-box" style="${isDone ? 'border-color:rgba(16,185,129,0.55);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
+            <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
+          </div>
         </div>
-        <div style="width:100%;height:9px;border-radius:99px;background:var(--surface-2);overflow:hidden;">
-          <div style="height:100%;width:${pct}%;background:var(--primary);transition:width .2s;"></div>
+
+        <div>
+          <div style="font-size:19px;font-weight:800;line-height:1.3;letter-spacing:-0.01em;">${p.title}</div>
+          <div style="font-size:13.5px;color:var(--muted);margin-top:4px;line-height:1.38;">${p.subtitle}</div>
+        </div>
+
+        <div style="background:var(--surface-2);border-left:4px solid var(--primary);padding:12px 14px;border-radius:12px;">
+          <div style="font-size:12px;font-weight:800;color:var(--primary);margin-bottom:4px;letter-spacing:0.03em;">💡 FIRST-PRINCIPLES INTUITION</div>
+          <div style="font-size:15px;line-height:1.48;color:var(--text);">${p.intuition}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.04em;">⚙️ HOW THE PIECES FIT TOGETHER</div>
+          ${pillarsHtml}
+        </div>
+
+        <div class="box-avoid" style="display:flex;flex-direction:column;gap:7px;">
+          <div style="font-size:12px;font-weight:800;color:var(--danger);letter-spacing:0.03em;">🪤 BOUNDARY TRAPS &amp; EDGE CASES</div>
+          ${trapsHtml}
         </div>
       </div>
-      <div class="scroll-pane">
-        ${rows}
+
+      <div class="thumb-controls">
+        <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${ui.pIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>
+        <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Next →</button>
       </div>
     `;
   }
@@ -1586,6 +1690,10 @@
       ui.picker = 'trig';
       renderApp();
     });
+    document.getElementById('open-principle-picker')?.addEventListener('click', () => {
+      ui.picker = 'principle';
+      renderApp();
+    });
 
     document.getElementById('picker-close-btn')?.addEventListener('click', () => {
       ui.picker = null;
@@ -1634,12 +1742,24 @@
       });
     });
 
+    document.querySelectorAll('[data-pick-principle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.pIdx = Number(btn.dataset.pickPrinciple);
+        ui.picker = null;
+        renderApp();
+        requestAnimationFrame(() => {
+          const box = document.getElementById('principle-card-box');
+          if (box) box.scrollTop = 0;
+        });
+      });
+    });
+
     const markVisibleRulesDone = () => {
       const now = Date.now();
       let newlyDone = 0;
       DATA.triggers.forEach((t, idx) => {
         if (ui.trigFilter === 'ALL' || t.sec === ui.trigFilter) {
-          const rid = 'r_' + idx;
+          const rid = t.id || ('r_' + idx);
           if (!progress.doneRules[rid]) {
             progress.doneRules[rid] = true;
             progress.ruleMeta[rid] = now;
@@ -1860,29 +1980,79 @@
       });
     }
 
-    if (ui.tab === 'plan') {
-      document.querySelectorAll('[data-day]').forEach(el => {
-        el.addEventListener('click', () => {
-          const d = el.dataset.day;
-          if (progress.doneDays[d]) delete progress.doneDays[d];
-          else progress.doneDays[d] = true;
-          progress.dayMeta[d] = Date.now();
-          if (progress.doneDays[d]) recordStudyAction(1);
-          else saveProgress(true);
+    if (ui.tab === 'principles') {
+      const scrollPrincipleTop = () => {
+        requestAnimationFrame(() => {
+          const box = document.getElementById('principle-card-box');
+          if (box) box.scrollTop = 0;
+        });
+      };
+
+      document.querySelectorAll('[data-pdot]').forEach(dot => {
+        dot.addEventListener('click', () => {
+          ui.pIdx = Number(dot.dataset.pdot);
           renderApp();
+          scrollPrincipleTop();
         });
       });
 
-      document.querySelectorAll('[data-open-deck]').forEach(btn => {
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          ui.deckIdx = Number(btn.dataset.openDeck);
+      document.querySelectorAll('[data-jump-deck]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          ui.deckIdx = Number(btn.dataset.jumpDeck);
           const firstOpen = DATA.decks[ui.deckIdx].cards.findIndex(c => !progress.doneCards[c.id]);
           ui.cardIdx = firstOpen !== -1 ? firstOpen : 0;
           ui.flipped = false;
           ui.tab = 'cards';
           renderApp();
         });
+      });
+
+      document.querySelectorAll('[data-jump-qsec]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          ui.quizFilter = btn.dataset.jumpQsec;
+          const qs = getActiveQuestions();
+          const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
+          ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
+          ui.secLeft = 120;
+          ui.tab = 'quiz';
+          startQuizTimerIfNeeded();
+          renderApp();
+        });
+      });
+
+      document.getElementById('p-prev')?.addEventListener('click', () => {
+        if (ui.pIdx > 0) {
+          ui.pIdx--;
+          renderApp();
+          scrollPrincipleTop();
+        }
+      });
+
+      document.getElementById('p-next')?.addEventListener('click', () => {
+        const list = DATA.principles || [];
+        if (ui.pIdx < list.length - 1) {
+          ui.pIdx++;
+          renderApp();
+          scrollPrincipleTop();
+        }
+      });
+
+      document.getElementById('p-got-it')?.addEventListener('click', () => {
+        const list = DATA.principles || [];
+        const cur = list[ui.pIdx];
+        if (!cur) return;
+        if (!progress.donePrinciples[cur.id]) {
+          progress.donePrinciples[cur.id] = true;
+          progress.principleMeta[cur.id] = Date.now();
+          recordStudyAction(1);
+        } else {
+          saveProgress(false);
+        }
+        if (ui.pIdx < list.length - 1) {
+          ui.pIdx++;
+        }
+        renderApp();
+        scrollPrincipleTop();
       });
     }
   }
@@ -2012,6 +2182,19 @@
         const qs = getActiveQuestions();
         if (dx < 0 && ui.qIdx < qs.length - 1) { ui.qIdx++; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
         else if (dx > 0 && ui.qIdx > 0) { ui.qIdx--; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
+      } else if (ui.tab === 'principles') {
+        const list = DATA.principles || [];
+        if (dx < 0 && ui.pIdx < list.length - 1) {
+          ui.pIdx++;
+          renderApp();
+          const box = document.getElementById('principle-card-box');
+          if (box) box.scrollTop = 0;
+        } else if (dx > 0 && ui.pIdx > 0) {
+          ui.pIdx--;
+          renderApp();
+          const box = document.getElementById('principle-card-box');
+          if (box) box.scrollTop = 0;
+        }
       }
     }
   }, { passive: true });
