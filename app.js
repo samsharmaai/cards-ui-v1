@@ -1288,6 +1288,27 @@
     return '';
   }
 
+  function getWidgetApkUrl() {
+    const host = window.location.hostname || '';
+    if (!host.endsWith('.github.io')) return '';
+    const owner = host.replace(/\.github\.io$/i, '');
+    const repo = (window.location.pathname || '').split('/').filter(Boolean)[0] || '';
+    if (!owner || !repo) return '';
+    return `https://github.com/${owner}/${repo}/releases/latest/download/cadence-widget.apk`;
+  }
+
+  function getWidgetPairUrl() {
+    if (!SESSION_PASS) return '';
+    const appUrl = new URL('./', window.location.href).href;
+    const code = toUrlCode(JSON.stringify({
+      k: SESSION_PASS.trim(),
+      u: appUrl,
+      t: '2026-12-12',
+      g: 45
+    }));
+    return `cadencewidget://pair?code=${code}`;
+  }
+
   function renderSyncDrawer() {
     if (!ui.showSyncDrawer) return '';
 
@@ -1314,6 +1335,23 @@
       </div>
     `;
 
+    const apkUrl = getWidgetApkUrl();
+    const widgetPairUrl = getWidgetPairUrl();
+    const androidWidgetHtml = (apkUrl || widgetPairUrl)
+      ? `
+        <div class="day-log-row" style="gap:9px;">
+          <div style="font-size:13.5px;font-weight:800;color:var(--muted);">📱 ANDROID 2×2 HOME WIDGET</div>
+          <div style="font-size:12.5px;color:var(--muted);line-height:1.4;">
+            Install the APK on your Pixel, then tap Auto-Link to pair your key &amp; pin the 2×2 streak widget.
+          </div>
+          <div style="display:grid;grid-template-columns:${apkUrl && widgetPairUrl ? '1fr 1fr' : '1fr'};gap:8px;">
+            ${apkUrl ? `<a href="${apkUrl}" class="sec-btn" style="padding:10px;font-size:13.5px;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;">⬇ Download APK</a>` : ''}
+            ${widgetPairUrl ? `<a href="${widgetPairUrl}" class="primary-btn" style="padding:10px;font-size:13.5px;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;">⚡ Auto-Link Widget</a>` : ''}
+          </div>
+        </div>
+      `
+      : '';
+
     const pasteBoxHtml = ui.showPasteBox
       ? `
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
@@ -1333,6 +1371,7 @@
 
           ${msgBanner}
           ${autoSyncHtml}
+          ${androidWidgetHtml}
 
           <div class="day-log-row" style="gap:9px;">
             <div style="font-size:13.5px;font-weight:800;color:var(--muted);">INSTANT TRANSFER (NO KEY NEEDED)</div>

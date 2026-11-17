@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Cadence Widget</string>
+    <string name="widget_name">Cadence 2×2 Streak</string>
+    <string name="widget_description">Daily streak, focus minutes today, and target date countdown.</string>
+</resources>
