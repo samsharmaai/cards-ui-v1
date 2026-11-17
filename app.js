@@ -66,6 +66,13 @@
     deckIdx: 0,
     cardIdx: 0,
     flipped: false,
+    duelSub: 'duel',
+    duelFilter: 'ROUND10',
+    duelRoundIds: [],
+    duelIdx: 0,
+    duelSessionPicks: {},
+    duelRoundDone: false,
+    duelCombo: 0,
     trigFilter: 'ALL',
     trigSearch: '',
     quizFilter: 'ALL',
@@ -96,6 +103,10 @@
         tab: ui.tab,
         deckIdx: ui.deckIdx,
         cardIdx: ui.cardIdx,
+        duelSub: ui.duelSub,
+        duelFilter: ui.duelFilter,
+        duelRoundIds: ui.duelRoundIds,
+        duelIdx: ui.duelIdx,
         trigFilter: ui.trigFilter,
         quizFilter: ui.quizFilter,
         qIdx: ui.qIdx,
@@ -181,6 +192,8 @@
       doneCards: parsed.doneCards || {},
       doneRules: parsed.doneRules || {},
       donePrinciples: parsed.donePrinciples || {},
+      doneDuels: parsed.doneDuels || {},
+      trickyDuels: parsed.trickyDuels || {},
       answers: parsed.answers || {},
       missedQs: parsed.missedQs || {},
       doneDays: parsed.doneDays || {},
@@ -189,6 +202,7 @@
       cardMeta: parsed.cardMeta || {},
       ruleMeta: parsed.ruleMeta || {},
       principleMeta: parsed.principleMeta || {},
+      duelMeta: parsed.duelMeta || {},
       qMeta: parsed.qMeta || {},
       dayMeta: parsed.dayMeta || {},
       lastDeckIdx: parsed.lastDeckIdx || 0,
@@ -259,6 +273,25 @@
       } else {
         if (a.donePrinciples[k] || b.donePrinciples[k]) out.donePrinciples[k] = true;
         if (ta) out.principleMeta[k] = ta;
+      }
+    });
+
+    // Timestamp-aware merge for binary duels
+    Object.keys({ ...a.doneDuels, ...b.doneDuels, ...a.trickyDuels, ...b.trickyDuels, ...a.duelMeta, ...b.duelMeta }).forEach(k => {
+      const ta = a.duelMeta[k] || 0;
+      const tb = b.duelMeta[k] || 0;
+      if (ta > tb) {
+        if (a.doneDuels[k]) out.doneDuels[k] = true;
+        if (a.trickyDuels[k]) out.trickyDuels[k] = true;
+        out.duelMeta[k] = ta;
+      } else if (tb > ta) {
+        if (b.doneDuels[k]) out.doneDuels[k] = true;
+        if (b.trickyDuels[k]) out.trickyDuels[k] = true;
+        out.duelMeta[k] = tb;
+      } else {
+        if (a.doneDuels[k] || b.doneDuels[k]) out.doneDuels[k] = true;
+        if ((a.trickyDuels[k] || b.trickyDuels[k]) && !out.doneDuels[k]) out.trickyDuels[k] = true;
+        if (ta) out.duelMeta[k] = ta;
       }
     });
 
@@ -697,6 +730,8 @@
         progress.flaggedCards,
         progress.doneRules,
         progress.donePrinciples,
+        progress.doneDuels,
+        progress.trickyDuels,
         progress.answers,
         progress.doneDays
       ]);
@@ -732,6 +767,8 @@
         progress.flaggedCards,
         progress.doneRules,
         progress.donePrinciples,
+        progress.doneDuels,
+        progress.trickyDuels,
         progress.answers,
         progress.doneDays
       ]);
@@ -789,6 +826,65 @@
     await syncWithCloud({ silent: true, isInitial: true });
   }
 
+  function shuffleCopy(arr) {
+    const out = arr.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = out[i];
+      out[i] = out[j];
+      out[j] = tmp;
+    }
+    return out;
+  }
+
+  function dealChillRound() {
+    const all = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
+    if (!all.length) {
+      ui.duelRoundIds = [];
+      ui.duelIdx = 0;
+      ui.duelSessionPicks = {};
+      ui.duelRoundDone = false;
+      return;
+    }
+    const tricky = shuffleCopy(all.filter(d => !!progress.trickyDuels[d.id]));
+    const unseen = shuffleCopy(all.filter(d => !progress.doneDuels[d.id] && !progress.trickyDuels[d.id]));
+    const done = shuffleCopy(all.filter(d => !!progress.doneDuels[d.id] && !progress.trickyDuels[d.id]));
+    const ordered = [
+      ...tricky.slice(0, 3),
+      ...unseen,
+      ...tricky.slice(3),
+      ...done
+    ].slice(0, 10);
+
+    ui.duelRoundIds = ordered.map(d => d.id);
+    ui.duelIdx = 0;
+    ui.duelSessionPicks = {};
+    ui.duelRoundDone = false;
+  }
+
+  function getActiveDuels() {
+    const all = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
+    if (!all.length) return [];
+    if (ui.duelFilter === 'ROUND10') {
+      if (!Array.isArray(ui.duelRoundIds) || !ui.duelRoundIds.length) {
+        dealChillRound();
+      }
+      const byId = {};
+      all.forEach(d => { byId[d.id] = d; });
+      const resolved = ui.duelRoundIds.map(id => byId[id]).filter(Boolean);
+      if (!resolved.length) {
+        dealChillRound();
+        return ui.duelRoundIds.map(id => byId[id]).filter(Boolean);
+      }
+      return resolved;
+    }
+    if (ui.duelFilter === 'ALL') return all;
+    if (ui.duelFilter === 'TRICKY') {
+      return all.filter(d => !!progress.trickyDuels[d.id] || ui.duelSessionPicks[d.id] !== undefined);
+    }
+    return all.filter(d => d.sec === ui.duelFilter);
+  }
+
   function getQuizSets() {
     if (!DATA || !Array.isArray(DATA.questions)) return [];
     const seen = new Set();
@@ -831,12 +927,30 @@
       const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
       ui.pIdx = nextP !== -1 ? nextP : 0;
     }
+    if (!ui.duelRoundIds || !ui.duelRoundIds.length) {
+      dealChillRound();
+    }
 
     if (restoreSavedUi) {
       const saved = loadSavedUiState();
       if (saved && typeof saved === 'object') {
-        if (['cards', 'triggers', 'quiz', 'principles'].includes(saved.tab)) {
+        if (saved.tab === 'triggers') {
+          ui.tab = 'duel';
+        } else if (['cards', 'duel', 'quiz', 'principles'].includes(saved.tab)) {
           ui.tab = saved.tab;
+        }
+        if (saved.duelSub === 'duel' || saved.duelSub === 'rules') {
+          ui.duelSub = saved.duelSub;
+        }
+        if (typeof saved.duelFilter === 'string') {
+          ui.duelFilter = saved.duelFilter;
+        }
+        if (Array.isArray(saved.duelRoundIds) && saved.duelRoundIds.length) {
+          ui.duelRoundIds = saved.duelRoundIds;
+        }
+        const activeDuels = getActiveDuels();
+        if (typeof saved.duelIdx === 'number' && saved.duelIdx >= 0 && saved.duelIdx < activeDuels.length) {
+          ui.duelIdx = saved.duelIdx;
         }
         if (typeof saved.timerOn === 'boolean') {
           ui.timerOn = saved.timerOn;
@@ -1285,28 +1399,60 @@
       `;
     }
 
+    if (ui.picker === 'duel') {
+      const allDuels = DATA.duels || [];
+      const doneTotal = allDuels.filter(d => !!progress.doneDuels[d.id]).length;
+      const trickyTotal = allDuels.filter(d => !!progress.trickyDuels[d.id]).length;
+      const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+
+      const secRows = secs.map(s => {
+        const list = allDuels.filter(d => d.sec === s);
+        const cnt = list.filter(d => !!progress.doneDuels[d.id]).length;
+        const complete = list.length > 0 && cnt === list.length;
+        const active = ui.duelFilter === s;
+        const prefix = complete ? '✓ ' : (active ? '▶ ' : '');
+        return `
+          <button class="picker-item ${active ? 'active' : ''} ${complete && !active ? 'done-item' : ''}" data-pick-duelfilter="${s}">
+            <div style="font-size:14.5px;font-weight:700;">${prefix}${s}</div>
+            <span style="font-size:13px;font-weight:700;color:${complete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${cnt}/${list.length}</span>
+          </button>
+        `;
+      }).join('');
+
+      return `
+        <div class="drawer-backdrop" id="picker-backdrop">
+          <div class="drawer-sheet" role="dialog" aria-label="Select Duel Mode">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-size:18px;font-weight:800;">⚔️ Quick Duel Mode</div>
+              <div style="display:flex;align-items:center;gap:7px;">
+                <button class="icon-btn" id="reshuffle-chill-btn" style="padding:7px 10px;font-size:12.5px;">↻ Fresh 10</button>
+                <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
+              </div>
+            </div>
+            <div class="picker-list">
+              <button class="picker-item ${ui.duelFilter === 'ROUND10' ? 'active' : ''}" data-pick-duelfilter="ROUND10">
+                <div>
+                  <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'ROUND10' ? '▶ ' : ''}☕ 10-Pick Chill Round</div>
+                  <div style="font-size:12px;color:var(--muted);margin-top:2px;">Bite-sized evening mix (unseen + tricky first)</div>
+                </div>
+                <span style="font-size:13px;font-weight:700;color:var(--primary);white-space:nowrap;">10 picks</span>
+              </button>
+              <button class="picker-item ${ui.duelFilter === 'TRICKY' ? 'active' : ''}" data-pick-duelfilter="TRICKY">
+                <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'TRICKY' ? '▶ ' : ''}🔁 Tricky Picks</div>
+                <span style="font-size:13px;font-weight:700;color:${trickyTotal ? 'var(--warn)' : 'var(--muted)'};white-space:nowrap;">${trickyTotal}</span>
+              </button>
+              <button class="picker-item ${ui.duelFilter === 'ALL' ? 'active' : ''} ${doneTotal === allDuels.length && allDuels.length > 0 && ui.duelFilter !== 'ALL' ? 'done-item' : ''}" data-pick-duelfilter="ALL">
+                <div style="font-size:14.5px;font-weight:700;">${doneTotal === allDuels.length && allDuels.length > 0 ? '✓ ' : (ui.duelFilter === 'ALL' ? '▶ ' : '')}⚡ All Duels</div>
+                <span style="font-size:13px;font-weight:700;color:${doneTotal === allDuels.length && allDuels.length > 0 ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${doneTotal}/${allDuels.length}</span>
+              </button>
+              ${secRows}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     return '';
-  }
-
-  function getWidgetApkUrl() {
-    const host = window.location.hostname || '';
-    if (!host.endsWith('.github.io')) return '';
-    const owner = host.replace(/\.github\.io$/i, '');
-    const repo = (window.location.pathname || '').split('/').filter(Boolean)[0] || '';
-    if (!owner || !repo) return '';
-    return `https://github.com/${owner}/${repo}/releases/latest/download/cadence-widget.apk`;
-  }
-
-  function getWidgetPairUrl() {
-    if (!SESSION_PASS) return '';
-    const appUrl = new URL('./', window.location.href).href;
-    const code = toUrlCode(JSON.stringify({
-      k: SESSION_PASS.trim(),
-      u: appUrl,
-      t: '2026-12-12',
-      g: 45
-    }));
-    return `cadencewidget://pair?code=${code}`;
   }
 
   function renderSyncDrawer() {
@@ -1335,23 +1481,6 @@
       </div>
     `;
 
-    const apkUrl = getWidgetApkUrl();
-    const widgetPairUrl = getWidgetPairUrl();
-    const androidWidgetHtml = (apkUrl || widgetPairUrl)
-      ? `
-        <div class="day-log-row" style="gap:9px;">
-          <div style="font-size:13.5px;font-weight:800;color:var(--muted);">📱 ANDROID 2×2 HOME WIDGET</div>
-          <div style="font-size:12.5px;color:var(--muted);line-height:1.4;">
-            Install the APK on your Pixel, then tap Auto-Link to pair your key &amp; pin the 2×2 streak widget.
-          </div>
-          <div style="display:grid;grid-template-columns:${apkUrl && widgetPairUrl ? '1fr 1fr' : '1fr'};gap:8px;">
-            ${apkUrl ? `<a href="${apkUrl}" class="sec-btn" style="padding:10px;font-size:13.5px;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;">⬇ Download APK</a>` : ''}
-            ${widgetPairUrl ? `<a href="${widgetPairUrl}" class="primary-btn" style="padding:10px;font-size:13.5px;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;">⚡ Auto-Link Widget</a>` : ''}
-          </div>
-        </div>
-      `
-      : '';
-
     const pasteBoxHtml = ui.showPasteBox
       ? `
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
@@ -1371,7 +1500,6 @@
 
           ${msgBanner}
           ${autoSyncHtml}
-          ${androidWidgetHtml}
 
           <div class="day-log-row" style="gap:9px;">
             <div style="font-size:13.5px;font-weight:800;color:var(--muted);">INSTANT TRANSFER (NO KEY NEEDED)</div>
@@ -1427,7 +1555,7 @@
 
     let mainHtml = '';
     if (ui.tab === 'cards') mainHtml = renderCardsTab();
-    else if (ui.tab === 'triggers') mainHtml = renderTriggersTab();
+    else if (ui.tab === 'duel' || ui.tab === 'triggers') mainHtml = renderDuelTab();
     else if (ui.tab === 'quiz') mainHtml = renderQuizTab();
     else mainHtml = renderPrinciplesTab();
 
@@ -1462,9 +1590,9 @@
               <span style="font-size:18px;">🗂</span>
               <span>Cards</span>
             </button>
-            <button class="nav-tab ${ui.tab === 'triggers' ? 'active' : ''}" data-tab="triggers">
-              <span style="font-size:18px;">⚡</span>
-              <span>Rules</span>
+            <button class="nav-tab ${ui.tab === 'duel' || ui.tab === 'triggers' ? 'active' : ''}" data-tab="duel">
+              <span style="font-size:18px;">⚔️</span>
+              <span>Duel</span>
             </button>
             <button class="nav-tab ${ui.tab === 'quiz' ? 'active' : ''}" data-tab="quiz">
               <span style="font-size:18px;">🎯</span>
@@ -1576,6 +1704,166 @@
     `;
   }
 
+  function renderDuelTab() {
+    if (ui.duelSub === 'rules') {
+      return renderTriggersTab();
+    }
+
+    const allDuels = DATA.duels || [];
+    const doneTotal = allDuels.filter(d => !!progress.doneDuels[d.id]).length;
+    const trickyCount = allDuels.filter(d => !!progress.trickyDuels[d.id]).length;
+    const list = getActiveDuels();
+
+    let dropLabel = '';
+    if (ui.duelFilter === 'ROUND10') {
+      dropLabel = `☕ Chill Round (${Math.min(ui.duelIdx + 1, Math.max(1, list.length))}/${list.length || 10})`;
+    } else if (ui.duelFilter === 'TRICKY') {
+      dropLabel = `🔁 Tricky Picks (${list.length})`;
+    } else if (ui.duelFilter === 'ALL') {
+      dropLabel = `⚡ All Duels (${doneTotal}/${allDuels.length})`;
+    } else {
+      const secDone = list.filter(d => !!progress.doneDuels[d.id]).length;
+      const complete = list.length > 0 && secDone === list.length;
+      dropLabel = `${complete ? '✓ ' : ''}${ui.duelFilter} (${secDone}/${list.length})`;
+    }
+
+    const comboHtml = ui.duelCombo >= 2
+      ? `<span class="combo-pill">⚡ ${ui.duelCombo}x</span>`
+      : '';
+
+    const topBarHtml = `
+      <div class="selector-bar">
+        <button class="dropdown-btn" id="open-duel-picker">
+          <span class="dropdown-btn-label">${dropLabel}</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+        ${comboHtml}
+        <button class="icon-btn" id="toggle-duel-rules-btn" style="padding:8.5px 11px;font-size:13.5px;font-weight:700;">📜 Rules</button>
+      </div>
+    `;
+
+    if (ui.duelFilter === 'ROUND10' && ui.duelRoundDone && list.length > 0) {
+      const roundHits = list.filter(item => ui.duelSessionPicks[item.id] === item.ans).length;
+      return `
+        ${topBarHtml}
+        <div class="duel-prompt-card" style="gap:14px;">
+          <div style="font-size:34px;line-height:1;">☕✨</div>
+          <div style="font-size:22px;font-weight:800;">Chill Round Complete!</div>
+          <div style="font-size:16px;color:var(--muted);line-height:1.5;max-width:420px;">
+            You nailed <strong style="color:var(--success);">${roundHits}/${list.length}</strong> quick picks this round.<br/>
+            Overall bank mastered: <strong>${doneTotal}/${allDuels.length}</strong>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:9px;width:100%;max-width:320px;margin-top:4px;">
+            <button class="primary-btn" id="duel-new-round-btn" style="padding:14px 16px;">⚡ Deal Another 10</button>
+            ${trickyCount > 0 ? `<button class="sec-btn" id="duel-go-tricky-btn" style="padding:12px 14px;">🔁 Review ${trickyCount} Tricky ${trickyCount === 1 ? 'Pick' : 'Picks'}</button>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    if (!list.length) {
+      return `
+        ${topBarHtml}
+        <div class="duel-prompt-card" style="gap:12px;">
+          <div style="font-size:20px;font-weight:800;">✨ Zero tricky duels left!</div>
+          <div style="color:var(--muted);font-size:15.5px;max-width:380px;">You’ve cleared every tricky binary pick. Ready for a fresh 10-card chill round?</div>
+          <button class="primary-btn" id="duel-new-round-btn" style="padding:13px 18px;margin-top:4px;">☕ Deal 10-Pick Chill Round</button>
+        </div>
+      `;
+    }
+
+    if (ui.duelIdx >= list.length) ui.duelIdx = 0;
+    const d = list[ui.duelIdx];
+    const picked = ui.duelSessionPicks[d.id];
+    const answered = picked !== undefined;
+    const isMastered = !!progress.doneDuels[d.id];
+
+    const dotsHtml = list.map((item, idx) => {
+      let cls = 'cdot';
+      const sPick = ui.duelSessionPicks[item.id];
+      if (sPick !== undefined) {
+        cls += sPick === item.ans ? ' done' : ' wrong';
+      } else if (ui.duelFilter !== 'ROUND10' && progress.doneDuels[item.id]) {
+        cls += ' done';
+      }
+      if (idx === ui.duelIdx) cls += ' current';
+      return `<div class="${cls}" data-dueldot="${idx}"></div>`;
+    }).join('');
+
+    const tileCls = idx => {
+      if (!answered) return 'duel-tile';
+      if (idx === d.ans) return 'duel-tile win';
+      if (idx === picked && idx !== d.ans) return 'duel-tile miss';
+      return 'duel-tile dim';
+    };
+
+    const tileBadge = idx => {
+      if (!answered) return '';
+      if (idx === d.ans) return `<span style="font-size:12.5px;font-weight:800;color:var(--success);">✓ Pick</span>`;
+      if (idx === picked) return `<span style="font-size:12px;font-weight:700;color:var(--warn);">Not quite</span>`;
+      return '';
+    };
+
+    const feedbackHtml = answered
+      ? `
+        <div class="duel-feedback" style="border-color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">
+          <strong style="color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">${picked === d.ans ? '✓ Spot on:' : '💡 Quick rule:'}</strong>
+          <span style="margin-left:4px;">${fmtText(d.why)}</span>
+        </div>
+      `
+      : '';
+
+    let centerActionHtml = `<button class="sec-btn" disabled style="padding:14px 10px;opacity:0.7;">Tap A or B above</button>`;
+    if (answered) {
+      if (ui.duelFilter === 'ROUND10' && ui.duelIdx === list.length - 1) {
+        centerActionHtml = `<button class="success-btn" id="duel-finish-round" style="padding:14px 10px;">🎉 Finish Round →</button>`;
+      } else if (ui.duelIdx < list.length - 1) {
+        centerActionHtml = `<button class="primary-btn" id="duel-next-main" style="padding:14px 10px;">Next Duel →</button>`;
+      } else {
+        centerActionHtml = `<button class="success-btn" id="duel-new-round-btn" style="padding:14px 10px;">☕ Deal Fresh 10 →</button>`;
+      }
+    }
+
+    return `
+      ${topBarHtml}
+      <div class="card-dots">${dotsHtml}</div>
+
+      <div class="duel-stage">
+        <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}">
+          <span class="badge" style="${isMastered ? 'color:var(--success);' : ''}">${isMastered ? '✓ ' : ''}${d.sec} • ${ui.duelIdx + 1}/${list.length}</span>
+          <div class="duel-prompt-text">${fmtText(d.prompt)}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="duel-tiles">
+            <button class="${tileCls(0)}" data-duel-pick="0">
+              <div style="display:flex;justify-content:space-between;align-items:center;width:100%;gap:6px;">
+                <span style="font-size:12px;font-weight:800;color:var(--muted);">A</span>
+                ${tileBadge(0)}
+              </div>
+              <div class="duel-tile-label">${fmtText(d.a)}</div>
+            </button>
+            <button class="${tileCls(1)}" data-duel-pick="1">
+              <div style="display:flex;justify-content:space-between;align-items:center;width:100%;gap:6px;">
+                <span style="font-size:12px;font-weight:800;color:var(--muted);">B</span>
+                ${tileBadge(1)}
+              </div>
+              <div class="duel-tile-label">${fmtText(d.b)}</div>
+            </button>
+          </div>
+
+          ${feedbackHtml}
+        </div>
+      </div>
+
+      <div class="thumb-controls">
+        <button class="sec-btn" id="duel-prev" style="padding:14px 10px;" ${ui.duelIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        ${centerActionHtml}
+        <button class="sec-btn" id="duel-next" style="padding:14px 10px;" ${ui.duelIdx === list.length - 1 ? 'disabled' : ''}>Skip →</button>
+      </div>
+    `;
+  }
+
   function renderTriggersTab() {
     const q = ui.trigSearch.toLowerCase().trim();
     const indexed = DATA.triggers.map((t, idx) => ({ t, idx, id: t.id || ('r_' + idx) }));
@@ -1630,7 +1918,8 @@
 
     return `
       <div class="selector-bar">
-        <input id="trig-search" class="text-input" placeholder="Search rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;padding:8.5px 12px;font-size:15.5px;border-radius:12px;" />
+        <button class="icon-btn" id="toggle-duel-rules-btn" style="padding:8.5px 11px;font-size:13.5px;font-weight:800;border-color:var(--primary);color:var(--primary);">⚔️ Duel</button>
+        <input id="trig-search" class="text-input" placeholder="Search 50 rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;min-width:0;padding:8.5px 12px;font-size:15px;border-radius:12px;" />
         <button class="dropdown-btn" id="open-trig-picker" style="flex:0 0 auto;width:auto;${secComplete ? 'border-color:rgba(16,185,129,0.6);color:var(--success);' : ''}">
           <span class="dropdown-btn-label">${dropLabel}</span>
           <span class="dropdown-caret">▾</span>
@@ -2021,6 +2310,10 @@
       ui.picker = 'deck';
       renderApp();
     });
+    document.getElementById('open-duel-picker')?.addEventListener('click', () => {
+      ui.picker = 'duel';
+      renderApp();
+    });
     document.getElementById('open-quiz-picker')?.addEventListener('click', () => {
       ui.picker = 'quiz';
       renderApp();
@@ -2031,6 +2324,13 @@
     });
     document.getElementById('open-principle-picker')?.addEventListener('click', () => {
       ui.picker = 'principle';
+      renderApp();
+    });
+
+    document.getElementById('reshuffle-chill-btn')?.addEventListener('click', () => {
+      ui.duelFilter = 'ROUND10';
+      dealChillRound();
+      ui.picker = null;
       renderApp();
     });
 
@@ -2055,6 +2355,24 @@
           ui.cardIdx = 0;
         }
         ui.flipped = false;
+        ui.picker = null;
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('[data-pick-duelfilter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const nextFilter = btn.dataset.pickDuelfilter;
+        ui.duelFilter = nextFilter;
+        if (nextFilter === 'ROUND10') {
+          dealChillRound();
+        } else {
+          ui.duelSessionPicks = {};
+          ui.duelRoundDone = false;
+          const list = getActiveDuels();
+          const firstOpen = list.findIndex(d => !progress.doneDuels[d.id]);
+          ui.duelIdx = firstOpen !== -1 ? firstOpen : 0;
+        }
         ui.picker = null;
         renderApp();
       });
@@ -2208,43 +2526,124 @@
       });
     }
 
-    if (ui.tab === 'triggers') {
-      const input = document.getElementById('trig-search');
-      if (input) {
-        input.addEventListener('input', e => {
-          const pos = e.target.selectionStart;
-          ui.trigSearch = e.target.value;
-          renderApp();
-          const nextInput = document.getElementById('trig-search');
-          if (nextInput) {
-            nextInput.focus();
-            nextInput.setSelectionRange(pos, pos);
+    if (ui.tab === 'duel' || ui.tab === 'triggers') {
+      document.getElementById('toggle-duel-rules-btn')?.addEventListener('click', () => {
+        ui.duelSub = ui.duelSub === 'rules' ? 'duel' : 'rules';
+        renderApp();
+      });
+
+      if (ui.duelSub === 'rules') {
+        const input = document.getElementById('trig-search');
+        if (input) {
+          input.addEventListener('input', e => {
+            const pos = e.target.selectionStart;
+            ui.trigSearch = e.target.value;
+            renderApp();
+            const nextInput = document.getElementById('trig-search');
+            if (nextInput) {
+              nextInput.focus();
+              nextInput.setSelectionRange(pos, pos);
+            }
+          });
+        }
+
+        document.querySelectorAll('[data-toggle-rule]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const rid = btn.dataset.toggleRule;
+            if (progress.doneRules[rid]) delete progress.doneRules[rid];
+            else progress.doneRules[rid] = true;
+            progress.ruleMeta[rid] = Date.now();
+            if (progress.doneRules[rid]) recordStudyAction(1);
+            else saveProgress(true);
+            renderApp();
+          });
+        });
+
+        document.getElementById('mark-rules-inline-btn')?.addEventListener('click', markVisibleRulesDone);
+
+        document.getElementById('next-trigsec-btn')?.addEventListener('click', () => {
+          const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+          const pos = secs.indexOf(ui.trigFilter);
+          if (pos >= 0 && pos < secs.length - 1) {
+            ui.trigFilter = secs[pos + 1];
+            renderApp();
           }
         });
-      }
+      } else {
+        document.querySelectorAll('[data-dueldot]').forEach(dot => {
+          dot.addEventListener('click', () => {
+            ui.duelIdx = Number(dot.dataset.dueldot);
+            ui.duelRoundDone = false;
+            renderApp();
+          });
+        });
 
-      document.querySelectorAll('[data-toggle-rule]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const rid = btn.dataset.toggleRule;
-          if (progress.doneRules[rid]) delete progress.doneRules[rid];
-          else progress.doneRules[rid] = true;
-          progress.ruleMeta[rid] = Date.now();
-          if (progress.doneRules[rid]) recordStudyAction(1);
-          else saveProgress(true);
+        document.querySelectorAll('[data-duel-pick]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const list = getActiveDuels();
+            const cur = list[ui.duelIdx];
+            if (!cur || ui.duelSessionPicks[cur.id] !== undefined) return;
+            const picked = Number(btn.dataset.duelPick);
+            ui.duelSessionPicks[cur.id] = picked;
+            progress.duelMeta[cur.id] = Date.now();
+            if (picked === cur.ans) {
+              progress.doneDuels[cur.id] = true;
+              delete progress.trickyDuels[cur.id];
+              ui.duelCombo = (ui.duelCombo || 0) + 1;
+              try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) {}
+            } else {
+              progress.trickyDuels[cur.id] = true;
+              delete progress.doneDuels[cur.id];
+              ui.duelCombo = 0;
+              try { if (navigator.vibrate) navigator.vibrate([16, 40, 16]); } catch (_) {}
+            }
+            recordStudyAction(1);
+            renderApp();
+            requestAnimationFrame(() => {
+              const stage = document.querySelector('.duel-stage');
+              if (stage && stage.scrollHeight > stage.clientHeight) {
+                stage.scrollTo({ top: stage.scrollHeight, behavior: 'smooth' });
+              }
+            });
+          });
+        });
+
+        document.getElementById('duel-prev')?.addEventListener('click', () => {
+          if (ui.duelIdx > 0) {
+            ui.duelIdx--;
+            renderApp();
+          }
+        });
+
+        const stepNextDuel = () => {
+          const list = getActiveDuels();
+          if (ui.duelIdx < list.length - 1) {
+            ui.duelIdx++;
+            renderApp();
+          }
+        };
+        document.getElementById('duel-next')?.addEventListener('click', stepNextDuel);
+        document.getElementById('duel-next-main')?.addEventListener('click', stepNextDuel);
+
+        document.getElementById('duel-finish-round')?.addEventListener('click', () => {
+          ui.duelRoundDone = true;
           renderApp();
         });
-      });
 
-      document.getElementById('mark-rules-inline-btn')?.addEventListener('click', markVisibleRulesDone);
-
-      document.getElementById('next-trigsec-btn')?.addEventListener('click', () => {
-        const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
-        const pos = secs.indexOf(ui.trigFilter);
-        if (pos >= 0 && pos < secs.length - 1) {
-          ui.trigFilter = secs[pos + 1];
+        document.getElementById('duel-new-round-btn')?.addEventListener('click', () => {
+          ui.duelFilter = 'ROUND10';
+          dealChillRound();
           renderApp();
-        }
-      });
+        });
+
+        document.getElementById('duel-go-tricky-btn')?.addEventListener('click', () => {
+          ui.duelFilter = 'TRICKY';
+          ui.duelSessionPicks = {};
+          ui.duelRoundDone = false;
+          ui.duelIdx = 0;
+          renderApp();
+        });
+      }
     }
 
     if (ui.tab === 'quiz') {
@@ -2507,7 +2906,7 @@
       e.touches[0].clientY < window.innerHeight * 0.55
     ) {
       const scroller = e.target.closest
-        ? e.target.closest('.scroll-pane, .flashcard, .quiz-card, .lock-wrap')
+        ? e.target.closest('.scroll-pane, .duel-stage, .flashcard, .quiz-card, .lock-wrap')
         : null;
       if (!scroller || scroller.scrollTop <= 2) {
         ptrPossible = true;
@@ -2589,6 +2988,10 @@
         const cards = getActiveCards();
         if (dx < 0 && ui.cardIdx < cards.length - 1) { ui.cardIdx++; ui.flipped = false; renderApp(); }
         else if (dx > 0 && ui.cardIdx > 0) { ui.cardIdx--; ui.flipped = false; renderApp(); }
+      } else if ((ui.tab === 'duel' || ui.tab === 'triggers') && ui.duelSub === 'duel' && !ui.duelRoundDone) {
+        const list = getActiveDuels();
+        if (dx < 0 && ui.duelIdx < list.length - 1) { ui.duelIdx++; renderApp(); }
+        else if (dx > 0 && ui.duelIdx > 0) { ui.duelIdx--; renderApp(); }
       } else if (ui.tab === 'quiz') {
         const qs = getActiveQuestions();
         if (dx < 0 && ui.qIdx < qs.length - 1) { ui.qIdx++; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
@@ -2625,6 +3028,33 @@
       }
     }
   }, { passive: true });
+
+  document.addEventListener('keydown', e => {
+    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.picker) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if ((ui.tab === 'duel' || ui.tab === 'triggers') && ui.duelSub === 'duel') {
+      const k = e.key.toLowerCase();
+      if (k === '1' || k === 'a') {
+        const btnA = document.querySelector('[data-duel-pick="0"]');
+        if (btnA) { e.preventDefault(); btnA.click(); }
+      } else if (k === '2' || k === 'b') {
+        const btnB = document.querySelector('[data-duel-pick="1"]');
+        if (btnB) { e.preventDefault(); btnB.click(); }
+      } else if (e.key === 'ArrowLeft') {
+        const prevBtn = document.getElementById('duel-prev');
+        if (prevBtn && !prevBtn.disabled) { e.preventDefault(); prevBtn.click(); }
+      } else if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
+        const advBtn =
+          document.getElementById('duel-next-main') ||
+          document.getElementById('duel-finish-round') ||
+          (ui.duelRoundDone ? document.getElementById('duel-new-round-btn') : null) ||
+          (e.key === 'ArrowRight' ? document.getElementById('duel-next') : null);
+        if (advBtn && !advBtn.disabled) { e.preventDefault(); advBtn.click(); }
+      }
+    }
+  });
 
   // Auto-unlock if saved on device
   (async () => {

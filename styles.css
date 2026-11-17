@@ -932,6 +932,118 @@ html, body {
   color: var(--text);
 }
 
+.duel-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.duel-prompt-card {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 18px;
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  flex: 1;
+  min-height: 118px;
+}
+
+.duel-prompt-card.done-card {
+  border-color: rgba(16, 185, 129, 0.52);
+}
+
+.duel-prompt-text {
+  font-size: calc(19px + var(--fs-bump));
+  font-weight: 800;
+  line-height: 1.38;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  max-width: 560px;
+}
+
+.duel-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.duel-tile {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 13px 13px;
+  min-height: 98px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  transition: transform 0.1s ease, border-color 0.14s ease, background 0.14s ease;
+}
+
+.duel-tile:active {
+  transform: scale(0.98);
+}
+
+.duel-tile.win {
+  background: var(--success-bg);
+  border-color: var(--success);
+}
+
+.duel-tile.miss {
+  background: var(--warn-bg);
+  border-color: var(--warn);
+}
+
+.duel-tile.dim {
+  opacity: 0.55;
+}
+
+.duel-tile-label {
+  font-size: calc(16px + var(--fs-bump));
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.duel-feedback {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: calc(15px + var(--fs-bump) * 0.6);
+  line-height: 1.46;
+  color: var(--text);
+}
+
+.combo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  background: var(--warn-bg);
+  border: 1px solid rgba(245, 158, 11, 0.48);
+  color: var(--warn);
+  white-space: nowrap;
+}
+
 @media (min-width: 768px) {
   .app-shell {
     max-width: 780px;
@@ -952,6 +1064,13 @@ html, body {
   .flashcard, .quiz-card {
     padding: 22px 24px;
     gap: 15px;
+  }
+  .duel-prompt-card {
+    padding: 28px 26px;
+  }
+  .duel-tile {
+    padding: 16px 18px;
+    min-height: 108px;
   }
   .dropdown-btn {
     font-size: 15px;
