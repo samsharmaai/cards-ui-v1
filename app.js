@@ -4,6 +4,7 @@
   const LS_THEME = 'pd_theme_v1';
   const LS_SYNC = 'pd_sync_cfg_v1';
   const LS_UI = 'pd_ui_state_v1';
+  const LS_FONT = 'pd_font_scale_v1';
   const SYNC_FILENAME = 'cadence_sync_v1.json';
   const FIREBASE_PROJECT_ID = 'cadence-deck';
   const FIREBASE_COLLECTION = 'cadence';
@@ -31,6 +32,35 @@
   let windowFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
   let unsavedSecTicks = 0;
 
+  function loadFontScale() {
+    try {
+      const v = Number(localStorage.getItem(LS_FONT));
+      if (v === 0 || v === 1 || v === 2) return v;
+    } catch (_) {}
+    return 1; // Default to A+ comfort size
+  }
+
+  function applyFontScale(s) {
+    document.body.classList.remove('fs-0', 'fs-1', 'fs-2');
+    document.body.classList.add('fs-' + s);
+  }
+
+  function fontBtnLabel() {
+    if (ui.fontScale === 0) return 'A';
+    if (ui.fontScale === 2) return 'A++';
+    return 'A+';
+  }
+
+  function fmtText(raw) {
+    if (raw === null || raw === undefined) return '';
+    return String(raw)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  }
+
   let ui = {
     tab: 'cards',
     deckIdx: 0,
@@ -41,6 +71,9 @@
     quizFilter: 'ALL',
     qIdx: 0,
     pIdx: 0,
+    pView: 'step',
+    pStep: 0,
+    fontScale: loadFontScale(),
     timerOn: true,
     secLeft: 120,
     timerHandle: null,
@@ -54,6 +87,8 @@
     picker: null
   };
 
+  applyFontScale(ui.fontScale);
+
   function saveUiState() {
     if (!DATA) return;
     try {
@@ -65,6 +100,8 @@
         quizFilter: ui.quizFilter,
         qIdx: ui.qIdx,
         pIdx: ui.pIdx,
+        pView: ui.pView,
+        pStep: ui.pStep,
         timerOn: ui.timerOn
       }));
     } catch (_) {}
@@ -817,6 +854,12 @@
         if (typeof saved.pIdx === 'number' && DATA.principles && saved.pIdx >= 0 && saved.pIdx < DATA.principles.length) {
           ui.pIdx = saved.pIdx;
         }
+        if (saved.pView === 'step' || saved.pView === 'full') {
+          ui.pView = saved.pView;
+        }
+        if (typeof saved.pStep === 'number' && saved.pStep >= 0 && saved.pStep <= 3) {
+          ui.pStep = saved.pStep;
+        }
         const validSets = getQuizSets();
         if (saved.quizFilter === 'ALL' || saved.quizFilter === 'MISSED' || validSets.includes(saved.quizFilter)) {
           ui.quizFilter = saved.quizFilter;
@@ -930,6 +973,14 @@
   function toggleTheme() {
     document.body.classList.toggle('light');
     localStorage.setItem(LS_THEME, document.body.classList.contains('light') ? 'light' : 'dark');
+  }
+
+  function cycleFontScale() {
+    ui.fontScale = (ui.fontScale + 1) % 3;
+    try { localStorage.setItem(LS_FONT, String(ui.fontScale)); } catch (_) {}
+    applyFontScale(ui.fontScale);
+    const btn = document.getElementById('font-btn');
+    if (btn) btn.textContent = fontBtnLabel();
   }
 
   function lockNow() {
@@ -1351,11 +1402,12 @@
               <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
             <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily log">
               <span id="streak-count-label">🔥 ${stats.streak}d</span>
             </button>
             <button class="icon-btn" id="sync-open-btn" title="Cross-device sync" style="${syncBtnStyle()}">${syncBtnLabel()}</button>
+            <button class="icon-btn" id="font-btn" title="Text size (tap to cycle A / A+ / A++)" style="padding:7px 9px;font-weight:800;font-size:13px;">${fontBtnLabel()}</button>
             <button class="icon-btn" id="theme-btn" aria-label="Toggle theme" style="padding:7px 9px;">◐</button>
             <button class="icon-btn" id="lock-btn" aria-label="Lock" style="padding:7px 9px;">🔒</button>
           </div>
@@ -1467,11 +1519,11 @@
           </div>
         </div>
 
-        <div class="card-body">${ui.flipped ? c.a : c.q}</div>
+        <div class="card-body">${fmtText(ui.flipped ? c.a : c.q)}</div>
 
         <div style="display:flex;flex-direction:column;gap:10px;">
-          ${ui.flipped ? `<div class="card-tip"><strong>⚡ Key Rule:</strong> ${c.tip}</div>` : ''}
-          <div style="text-align:center;font-size:13px;font-weight:600;color:var(--primary);">
+          ${ui.flipped ? `<div class="card-tip"><strong>⚡ Key Rule:</strong> ${fmtText(c.tip)}</div>` : ''}
+          <div style="text-align:center;font-size:13.5px;font-weight:600;color:var(--primary);">
             ${ui.flipped ? '👆 Tap card for prompt • Or tap Got It below' : '👆 Tap anywhere on card to flip'}
           </div>
         </div>
@@ -1511,14 +1563,14 @@
               ${isDone ? '✓ Done' : '○ Mark Read'}
             </button>
           </div>
-          <div style="font-size:16.5px;font-weight:700;line-height:1.42;">“${t.cue}”</div>
+          <div class="rule-cue">“${fmtText(t.cue)}”</div>
           <div class="box-win">
-            <div style="font-size:12px;font-weight:800;color:var(--success);margin-bottom:4px;">✅ PICK</div>
-            <div style="font-size:15.5px;line-height:1.4;font-weight:600;">${t.pick}</div>
+            <div style="font-size:12.5px;font-weight:800;color:var(--success);margin-bottom:5px;">✅ PICK</div>
+            <div class="rule-pick">${fmtText(t.pick)}</div>
           </div>
           <div class="box-avoid">
-            <div style="font-size:12px;font-weight:800;color:var(--danger);margin-bottom:4px;">❌ AVOID</div>
-            <div style="font-size:14.5px;line-height:1.4;color:var(--muted);">${t.avoid}</div>
+            <div style="font-size:12.5px;font-weight:800;color:var(--danger);margin-bottom:5px;">❌ AVOID</div>
+            <div class="rule-avoid">${fmtText(t.avoid)}</div>
           </div>
         </div>
       `;
@@ -1539,7 +1591,7 @@
 
     return `
       <div class="selector-bar">
-        <input id="trig-search" class="text-input" placeholder="Search rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;padding:8.5px 12px;font-size:15px;border-radius:12px;" />
+        <input id="trig-search" class="text-input" placeholder="Search rules..." value="${ui.trigSearch.replace(/"/g, '&quot;')}" style="flex:1;padding:8.5px 12px;font-size:15.5px;border-radius:12px;" />
         <button class="dropdown-btn" id="open-trig-picker" style="flex:0 0 auto;width:auto;${secComplete ? 'border-color:rgba(16,185,129,0.6);color:var(--success);' : ''}">
           <span class="dropdown-btn-label">${dropLabel}</span>
           <span class="dropdown-caret">▾</span>
@@ -1570,7 +1622,7 @@
         </div>
         <div class="quiz-card" style="justify-content:center;align-items:center;text-align:center;padding:36px 20px;">
           <div style="font-size:18px;font-weight:700;">Zero missed items right now! 🎉</div>
-          <div style="font-size:15px;color:var(--muted);">Any question you miss lands here automatically until you master it.</div>
+          <div style="font-size:15.5px;color:var(--muted);">Any question you miss lands here automatically until you master it.</div>
         </div>
       `;
     }
@@ -1612,7 +1664,7 @@
         if (idx === q.ans) { cls += ' correct'; prefix = '✅ '; }
         else if (idx === chosen) { cls += ' wrong'; prefix = '❌ '; }
       }
-      return `<button class="${cls}" data-opt="${idx}">${prefix}${opt}</button>`;
+      return `<button class="${cls}" data-opt="${idx}">${prefix}${fmtText(opt)}</button>`;
     }).join('');
 
     const rightControlBtn = (ui.qIdx === qs.length - 1 && setComplete && nextQuizSec)
@@ -1625,7 +1677,7 @@
           <span class="dropdown-btn-label" style="${setComplete ? 'color:var(--success);' : ''}">${setComplete ? '✓ ' : ''}${activeFilterLabel} • Q ${ui.qIdx + 1}/${qs.length}</span>
           <span class="dropdown-caret">▾</span>
         </button>
-        ${showResumeBtn ? `<button class="icon-btn" id="jump-quiz-open-btn" style="padding:7px 9px;font-size:12px;border-color:var(--primary);color:var(--primary);">▶ Next</button>` : `<span style="font-size:12.5px;font-weight:700;color:${setComplete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>`}
+        ${showResumeBtn ? `<button class="icon-btn" id="jump-quiz-open-btn" style="padding:7px 9px;font-size:12.5px;border-color:var(--primary);color:var(--primary);">▶ Next</button>` : `<span style="font-size:13px;font-weight:700;color:${setComplete ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${rightCount}/${answeredList.length}</span>`}
         <button class="icon-btn" id="toggle-timer" style="padding:7px 9px;font-size:12.5px;">
           <span id="timer-badge">${ui.timerOn ? `⏱ ${m}:${s}` : '⏱ Off'}</span>
         </button>
@@ -1634,13 +1686,13 @@
       ${qProgressHtml}
 
       <div class="quiz-card" id="quiz-card-box" style="${setComplete ? 'border-color:rgba(16,185,129,0.45);' : ''}">
-        <div class="quiz-q">${q.q}</div>
+        <div class="quiz-q">${fmtText(q.q)}</div>
         <div style="display:flex;flex-direction:column;gap:9px;">
           ${optsHtml}
         </div>
         ${chosen !== undefined ? `
           <div class="card-tip">
-            <strong>Why:</strong> ${q.exp}
+            <strong>Why:</strong> ${fmtText(q.exp)}
             <div style="margin-top:10px;">
               <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
             </div>
@@ -1659,11 +1711,13 @@
     const list = DATA.principles || [];
     if (!list.length) return '';
     if (ui.pIdx >= list.length) ui.pIdx = 0;
+    if (ui.pStep < 0 || ui.pStep > 3) ui.pStep = 0;
 
     const p = list[ui.pIdx];
     const isDone = !!progress.donePrinciples[p.id];
     const doneTotal = list.filter(item => !!progress.donePrinciples[item.id]).length;
     const allDone = doneTotal === list.length;
+    const isStepView = ui.pView !== 'full';
 
     const dIdx = DATA.decks.findIndex(d => d.id === p.deckId);
 
@@ -1674,26 +1728,100 @@
       return `<div class="${dCls}" data-pdot="${idx}"></div>`;
     }).join('');
 
-    const pillarsHtml = (p.pillars || []).map(pil => `
-      <div class="principle-pillar">
-        <div class="principle-pillar-title">${pil.label}</div>
-        <div class="principle-pillar-desc">${pil.desc}</div>
+    const groundTruthText = fmtText(p.groundTruth || p.intuition || '');
+    const groundHtml = `
+      <div class="principle-ground-box">
+        <div class="principle-sec-label" style="color:var(--primary);">⚛️ FIRST PRINCIPLES (STRIP AWAY THE JARGON)</div>
+        <div class="principle-body">${groundTruthText}</div>
       </div>
-    `).join('');
+    `;
 
-    const trapsHtml = (p.traps || []).map(tr => `
-      <div style="font-size:14px;line-height:1.44;color:var(--text);">• ${tr}</div>
-    `).join('');
-
-    const groundTruthText = p.groundTruth || p.intuition || '';
     const razorHtml = p.razor
       ? `
         <div class="principle-razor">
-          <div style="font-size:12px;font-weight:800;color:var(--warn);margin-bottom:4px;letter-spacing:0.03em;">⚡ 5-SECOND MENTAL RAZOR</div>
-          <div style="font-size:14.5px;font-weight:700;line-height:1.42;color:var(--text);">${p.razor}</div>
+          <div class="principle-sec-label" style="color:var(--warn);">⚡ 5-SECOND MENTAL RAZOR</div>
+          <div class="principle-razor-text">${fmtText(p.razor)}</div>
         </div>
       `
       : '';
+
+    const pillarsInner = (p.pillars || []).map(pil => `
+      <div class="principle-pillar">
+        <div class="principle-pillar-title">${fmtText(pil.label)}</div>
+        <div class="principle-pillar-desc">${fmtText(pil.desc)}</div>
+      </div>
+    `).join('');
+
+    const buildUpHtml = `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="principle-sec-label" style="color:var(--muted);margin-bottom:0;">🧱 BUILD IT UP FROM ZERO</div>
+        ${pillarsInner}
+      </div>
+    `;
+
+    const trapsInner = (p.traps || []).map(tr => `
+      <div class="principle-trap-item">• ${fmtText(tr)}</div>
+    `).join('');
+
+    const trapsBoxHtml = `
+      <div class="box-avoid" style="display:flex;flex-direction:column;gap:9px;">
+        <div class="principle-sec-label" style="color:var(--danger);margin-bottom:0;">🪤 WHERE ANALOGY THINKING FAILS</div>
+        ${trapsInner}
+      </div>
+    `;
+
+    const stepLabels = ['1. Ground Truth', '2. 5s Razor', '3. Build Up', '4. Traps'];
+    const stepPillsHtml = isStepView
+      ? `<div class="p-step-bar">${stepLabels.map((lbl, idx) => `
+          <button class="p-step-pill ${ui.pStep === idx ? 'active' : ''}" data-pstep="${idx}">${lbl}</button>
+        `).join('')}</div>`
+      : '';
+
+    let contentBodyHtml = '';
+    if (isStepView) {
+      if (ui.pStep === 0) contentBodyHtml = groundHtml;
+      else if (ui.pStep === 1) contentBodyHtml = razorHtml || groundHtml;
+      else if (ui.pStep === 2) contentBodyHtml = buildUpHtml;
+      else contentBodyHtml = trapsBoxHtml;
+    } else {
+      contentBodyHtml = `
+        ${groundHtml}
+        ${razorHtml}
+        ${buildUpHtml}
+        ${trapsBoxHtml}
+      `;
+    }
+
+    const viewSwitchHtml = `
+      <div class="p-view-toggle" role="group" aria-label="Principle reading view">
+        <button class="p-view-btn ${isStepView ? 'active' : ''}" data-pview="step">📑 Steps</button>
+        <button class="p-view-btn ${!isStepView ? 'active' : ''}" data-pview="full">📜 Full</button>
+      </div>
+    `;
+
+    let bottomBarHtml = '';
+    if (isStepView) {
+      const prevDisabled = ui.pIdx === 0 && ui.pStep === 0;
+      const prevLabel = ui.pStep > 0 ? '← Block' : '← Prev';
+      const centerStepBtn = ui.pStep < 3
+        ? `<button class="primary-btn" id="p-next-step" style="padding:14px 10px;">Next Block (${ui.pStep + 2}/4) →</button>`
+        : `<button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>`;
+      bottomBarHtml = `
+        <div class="thumb-controls">
+          <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${prevDisabled ? 'disabled' : ''}>${prevLabel}</button>
+          ${centerStepBtn}
+          <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Mod →</button>
+        </div>
+      `;
+    } else {
+      bottomBarHtml = `
+        <div class="thumb-controls">
+          <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${ui.pIdx === 0 ? 'disabled' : ''}>← Prev</button>
+          <button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>
+          <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Next →</button>
+        </div>
+      `;
+    }
 
     return `
       <div class="selector-bar">
@@ -1701,7 +1829,7 @@
           <span class="dropdown-btn-label" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}${p.num}/${list.length} • ${p.title}</span>
           <span class="dropdown-caret">▾</span>
         </button>
-        <span style="font-size:12.5px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${doneTotal}/${list.length}</span>
+        <span style="font-size:13px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">✓ ${doneTotal}/${list.length}</span>
       </div>
 
       <div class="card-dots">${pDotsHtml}</div>
@@ -1709,40 +1837,23 @@
       <div class="quiz-card" id="principle-card-box" style="${isDone ? 'border-color:rgba(16,185,129,0.55);' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
           <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
-          <div style="display:flex;align-items:center;gap:6px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            ${viewSwitchHtml}
             ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
             <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
           </div>
         </div>
 
         <div>
-          <div style="font-size:19px;font-weight:800;line-height:1.3;letter-spacing:-0.01em;">${p.title}</div>
-          <div style="font-size:13.5px;color:var(--muted);margin-top:4px;line-height:1.38;">${p.subtitle}</div>
+          <div class="principle-title">${fmtText(p.title)}</div>
+          <div class="principle-sub">${fmtText(p.subtitle)}</div>
         </div>
 
-        <div style="background:var(--surface-2);border-left:4px solid var(--primary);padding:12px 14px;border-radius:12px;">
-          <div style="font-size:12px;font-weight:800;color:var(--primary);margin-bottom:4px;letter-spacing:0.03em;">⚛️ FIRST PRINCIPLES (STRIP AWAY THE JARGON)</div>
-          <div style="font-size:15px;line-height:1.48;color:var(--text);">${groundTruthText}</div>
-        </div>
-
-        ${razorHtml}
-
-        <div style="display:flex;flex-direction:column;gap:9px;">
-          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.04em;">🧱 BUILD IT UP FROM ZERO</div>
-          ${pillarsHtml}
-        </div>
-
-        <div class="box-avoid" style="display:flex;flex-direction:column;gap:7px;">
-          <div style="font-size:12px;font-weight:800;color:var(--danger);letter-spacing:0.03em;">🪤 WHERE ANALOGY THINKING FAILS</div>
-          ${trapsHtml}
-        </div>
+        ${stepPillsHtml}
+        ${contentBodyHtml}
       </div>
 
-      <div class="thumb-controls">
-        <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${ui.pIdx === 0 ? 'disabled' : ''}>← Prev</button>
-        <button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>
-        <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Next →</button>
-      </div>
+      ${bottomBarHtml}
     `;
   }
 
@@ -1769,6 +1880,7 @@
 
   function bindEvents() {
     document.getElementById('theme-btn')?.addEventListener('click', toggleTheme);
+    document.getElementById('font-btn')?.addEventListener('click', cycleFontScale);
     document.getElementById('lock-btn')?.addEventListener('click', lockNow);
 
     const openDrawer = () => {
@@ -1943,6 +2055,7 @@
     document.querySelectorAll('[data-pick-principle]').forEach(btn => {
       btn.addEventListener('click', () => {
         ui.pIdx = Number(btn.dataset.pickPrinciple);
+        ui.pStep = 0;
         ui.picker = null;
         renderApp();
         requestAnimationFrame(() => {
@@ -2204,6 +2317,26 @@
       document.querySelectorAll('[data-pdot]').forEach(dot => {
         dot.addEventListener('click', () => {
           ui.pIdx = Number(dot.dataset.pdot);
+          ui.pStep = 0;
+          renderApp();
+          scrollPrincipleTop();
+        });
+      });
+
+      document.querySelectorAll('[data-pview]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mode = btn.dataset.pview;
+          if (mode === 'step' || mode === 'full') {
+            ui.pView = mode;
+            renderApp();
+            scrollPrincipleTop();
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-pstep]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          ui.pStep = Number(btn.dataset.pstep);
           renderApp();
           scrollPrincipleTop();
         });
@@ -2244,9 +2377,22 @@
         });
       });
 
+      document.getElementById('p-next-step')?.addEventListener('click', () => {
+        if (ui.pStep < 3) {
+          ui.pStep++;
+          renderApp();
+          scrollPrincipleTop();
+        }
+      });
+
       document.getElementById('p-prev')?.addEventListener('click', () => {
-        if (ui.pIdx > 0) {
+        if (ui.pView !== 'full' && ui.pStep > 0) {
+          ui.pStep--;
+          renderApp();
+          scrollPrincipleTop();
+        } else if (ui.pIdx > 0) {
           ui.pIdx--;
+          ui.pStep = ui.pView !== 'full' ? 3 : 0;
           renderApp();
           scrollPrincipleTop();
         }
@@ -2256,6 +2402,7 @@
         const list = DATA.principles || [];
         if (ui.pIdx < list.length - 1) {
           ui.pIdx++;
+          ui.pStep = 0;
           renderApp();
           scrollPrincipleTop();
         }
@@ -2274,6 +2421,7 @@
         }
         if (ui.pIdx < list.length - 1) {
           ui.pIdx++;
+          ui.pStep = 0;
         }
         renderApp();
         scrollPrincipleTop();
@@ -2408,16 +2556,32 @@
         else if (dx > 0 && ui.qIdx > 0) { ui.qIdx--; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
       } else if (ui.tab === 'principles') {
         const list = DATA.principles || [];
-        if (dx < 0 && ui.pIdx < list.length - 1) {
-          ui.pIdx++;
-          renderApp();
-          const box = document.getElementById('principle-card-box');
-          if (box) box.scrollTop = 0;
-        } else if (dx > 0 && ui.pIdx > 0) {
-          ui.pIdx--;
-          renderApp();
-          const box = document.getElementById('principle-card-box');
-          if (box) box.scrollTop = 0;
+        if (dx < 0) {
+          if (ui.pView !== 'full' && ui.pStep < 3) {
+            ui.pStep++;
+            renderApp();
+            const box = document.getElementById('principle-card-box');
+            if (box) box.scrollTop = 0;
+          } else if (ui.pIdx < list.length - 1) {
+            ui.pIdx++;
+            ui.pStep = 0;
+            renderApp();
+            const box = document.getElementById('principle-card-box');
+            if (box) box.scrollTop = 0;
+          }
+        } else if (dx > 0) {
+          if (ui.pView !== 'full' && ui.pStep > 0) {
+            ui.pStep--;
+            renderApp();
+            const box = document.getElementById('principle-card-box');
+            if (box) box.scrollTop = 0;
+          } else if (ui.pIdx > 0) {
+            ui.pIdx--;
+            ui.pStep = ui.pView !== 'full' ? 3 : 0;
+            renderApp();
+            const box = document.getElementById('principle-card-box');
+            if (box) box.scrollTop = 0;
+          }
         }
       }
     }
