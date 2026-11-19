@@ -72,6 +72,7 @@
     duelIdx: 0,
     duelSessionPicks: {},
     duelRoundDone: false,
+    duelRefreshPass: false,
     duelCombo: 0,
     trigFilter: 'ALL',
     trigSearch: '',
@@ -86,6 +87,7 @@
     timerHandle: null,
     didInitialResume: false,
     showTimeDrawer: false,
+    drawerTab: 'radar',
     showSyncDrawer: false,
     showPasteBox: false,
     syncStatus: 'idle',
@@ -205,6 +207,7 @@
       duelMeta: parsed.duelMeta || {},
       qMeta: parsed.qMeta || {},
       dayMeta: parsed.dayMeta || {},
+      itemStats: parsed.itemStats || {},
       lastDeckIdx: parsed.lastDeckIdx || 0,
       lastCardIdx: parsed.lastCardIdx || 0
     };
@@ -341,7 +344,67 @@
       if (v > 0) out.dailySeconds[dk] = v;
     });
 
+    // Persistent attempt & miss history per quiz/duel item
+    Object.keys({ ...a.itemStats, ...b.itemStats }).forEach(k => {
+      const sa = a.itemStats[k];
+      const sb = b.itemStats[k];
+      if (!sa && !sb) return;
+      if (sa && !sb) { out.itemStats[k] = { ...sa }; return; }
+      if (!sa && sb) { out.itemStats[k] = { ...sb }; return; }
+      const la = sa.lastAt || 0;
+      const lb = sb.lastAt || 0;
+      const newer = lb > la ? sb : sa;
+      out.itemStats[k] = {
+        tries: Math.max(sa.tries || 0, sb.tries || 0),
+        misses: Math.max(sa.misses || 0, sb.misses || 0),
+        streak: la === lb ? Math.max(sa.streak || 0, sb.streak || 0) : (newer.streak || 0),
+        lastAt: Math.max(la, lb),
+        lastMissAt: Math.max(sa.lastMissAt || 0, sb.lastMissAt || 0)
+      };
+    });
+
     return out;
+  }
+
+  function getItemStat(prefix, id) {
+    const key = `${prefix}:${id}`;
+    const raw = (progress.itemStats && progress.itemStats[key]) || null;
+    if (raw) {
+      return {
+        tries: raw.tries || 0,
+        misses: raw.misses || 0,
+        streak: raw.streak || 0,
+        lastAt: raw.lastAt || 0,
+        lastMissAt: raw.lastMissAt || 0
+      };
+    }
+    // Seed transparently from legacy missedQs / trickyDuels / answers if no stat entry exists yet
+    if (prefix === 'q') {
+      const missed = !!progress.missedQs[id];
+      const answered = progress.answers[id] !== undefined;
+      if (missed) return { tries: 1, misses: 1, streak: 0, lastAt: progress.qMeta[id] || 0, lastMissAt: progress.qMeta[id] || 0 };
+      if (answered) return { tries: 1, misses: 0, streak: 1, lastAt: progress.qMeta[id] || 0, lastMissAt: 0 };
+    } else if (prefix === 'd') {
+      if (progress.trickyDuels[id]) return { tries: 1, misses: 1, streak: 0, lastAt: progress.duelMeta[id] || 0, lastMissAt: progress.duelMeta[id] || 0 };
+      if (progress.doneDuels[id]) return { tries: 1, misses: 0, streak: 1, lastAt: progress.duelMeta[id] || 0, lastMissAt: 0 };
+    }
+    return { tries: 0, misses: 0, streak: 0, lastAt: 0, lastMissAt: 0 };
+  }
+
+  function recordItemAttempt(prefix, id, isCorrect) {
+    if (!progress.itemStats) progress.itemStats = {};
+    const key = `${prefix}:${id}`;
+    const prev = getItemStat(prefix, id);
+    const now = Date.now();
+    const next = {
+      tries: prev.tries + 1,
+      misses: prev.misses + (isCorrect ? 0 : 1),
+      streak: isCorrect ? prev.streak + 1 : 0,
+      lastAt: now,
+      lastMissAt: isCorrect ? prev.lastMissAt : now
+    };
+    progress.itemStats[key] = next;
+    return { ...next, hadPriorMiss: prev.misses > 0 };
   }
 
   function saveProgress(triggerCloud = false) {
@@ -733,6 +796,8 @@
         progress.doneDuels,
         progress.trickyDuels,
         progress.answers,
+        progress.missedQs,
+        progress.itemStats,
         progress.doneDays
       ]);
 
@@ -770,6 +835,8 @@
         progress.doneDuels,
         progress.trickyDuels,
         progress.answers,
+        progress.missedQs,
+        progress.itemStats,
         progress.doneDays
       ]);
 
@@ -779,23 +846,32 @@
       ui.syncStatus = 'ok';
       if (!silent) ui.syncMsg = '✓ Synced with Firebase!';
 
-      if (isInitial && afterSig !== beforeSig) {
-        const curCards = getActiveCards();
-        if (typeof ui.deckIdx === 'number' && curCards[ui.cardIdx] && progress.doneCards[curCards[ui.cardIdx].id]) {
-          const cardTarget = findCurrentTarget();
-          ui.deckIdx = cardTarget.deckIdx;
-          ui.cardIdx = cardTarget.cardIdx;
-          ui.flipped = false;
+      if (afterSig !== beforeSig) {
+        // Keep Chill Round synced across devices so mastered items never repeat after pull
+        if (ui.duelFilter === 'ROUND10' && !ui.duelRefreshPass && Object.keys(ui.duelSessionPicks || {}).length === 0) {
+          const hasMasteredInRound = (ui.duelRoundIds || []).some(id => !!progress.doneDuels[id]);
+          if (hasMasteredInRound || !(ui.duelRoundIds && ui.duelRoundIds.length)) {
+            dealChillRound(false);
+          }
         }
-        const curQs = getActiveQuestions();
-        if (ui.quizFilter !== 'MISSED' && curQs[ui.qIdx] && progress.answers[curQs[ui.qIdx].id] !== undefined) {
-          const qt = findQuizResumeTarget();
-          ui.quizFilter = qt.quizFilter;
-          ui.qIdx = qt.qIdx;
-        }
-        if (DATA && Array.isArray(DATA.principles) && DATA.principles[ui.pIdx] && progress.donePrinciples[DATA.principles[ui.pIdx].id]) {
-          const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
-          if (nextP !== -1) ui.pIdx = nextP;
+        if (isInitial) {
+          const curCards = getActiveCards();
+          if (typeof ui.deckIdx === 'number' && curCards[ui.cardIdx] && progress.doneCards[curCards[ui.cardIdx].id]) {
+            const cardTarget = findCurrentTarget();
+            ui.deckIdx = cardTarget.deckIdx;
+            ui.cardIdx = cardTarget.cardIdx;
+            ui.flipped = false;
+          }
+          const curQs = getActiveQuestions();
+          if (ui.quizFilter !== 'MISSED' && ui.quizFilter !== 'WEAKEST' && curQs[ui.qIdx] && progress.answers[curQs[ui.qIdx].id] !== undefined) {
+            const qt = findQuizResumeTarget();
+            ui.quizFilter = qt.quizFilter;
+            ui.qIdx = qt.qIdx;
+          }
+          if (DATA && Array.isArray(DATA.principles) && DATA.principles[ui.pIdx] && progress.donePrinciples[DATA.principles[ui.pIdx].id]) {
+            const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
+            if (nextP !== -1) ui.pIdx = nextP;
+          }
         }
         saveUiState();
       }
@@ -837,8 +913,165 @@
     return out;
   }
 
-  function dealChillRound() {
+  function computeDiagnostics() {
+    const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
+    const meta = (DATA && DATA.sectionMeta) || {};
+    const allQs = (DATA && Array.isArray(DATA.questions)) ? DATA.questions : [];
+    const allDuels = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
+    const allDecks = (DATA && Array.isArray(DATA.decks)) ? DATA.decks : [];
+
+    const topicMap = {};
+    const touchTopic = (topic, sec) => {
+      const key = topic || sec;
+      if (!topicMap[key]) {
+        topicMap[key] = {
+          topic: key,
+          sec,
+          tries: 0,
+          misses: 0,
+          activeMiss: 0
+        };
+      }
+      return topicMap[key];
+    };
+
+    const rows = secs.map(s => {
+      const sMeta = meta[s] || { label: s, weight: 16 };
+      const qs = allQs.filter(q => q.sec === s);
+      const ds = allDuels.filter(d => d.sec === s);
+
+      let qTried = 0;
+      let qRight = 0;
+      let qActiveMissed = 0;
+      let qHistMisses = 0;
+      let qHistTries = 0;
+
+      qs.forEach(q => {
+        const st = getItemStat('q', q.id);
+        const answered = progress.answers[q.id] !== undefined;
+        const isCorrectNow = answered && progress.answers[q.id] === q.ans;
+        const isActiveMissed = !!progress.missedQs[q.id];
+        if (answered) {
+          qTried++;
+          if (isCorrectNow) qRight++;
+        }
+        if (isActiveMissed) qActiveMissed++;
+        qHistMisses += st.misses;
+        qHistTries += st.tries;
+
+        if (st.tries > 0 || isActiveMissed) {
+          const tm = touchTopic(q.topic, s);
+          tm.tries += Math.max(st.tries, answered ? 1 : 0);
+          tm.misses += st.misses;
+          if (isActiveMissed) tm.activeMiss++;
+        }
+      });
+
+      let dDone = 0;
+      let dTricky = 0;
+      let dHistMisses = 0;
+      let dHistTries = 0;
+
+      ds.forEach(d => {
+        const st = getItemStat('d', d.id);
+        if (progress.doneDuels[d.id]) dDone++;
+        if (progress.trickyDuels[d.id]) dTricky++;
+        dHistMisses += st.misses;
+        dHistTries += st.tries;
+
+        if (st.tries > 0 || progress.trickyDuels[d.id]) {
+          const tm = touchTopic(d.topic, s);
+          tm.tries += Math.max(st.tries, (progress.doneDuels[d.id] || progress.trickyDuels[d.id]) ? 1 : 0);
+          tm.misses += st.misses;
+          if (progress.trickyDuels[d.id]) tm.activeMiss++;
+        }
+      });
+
+      let savedCards = 0;
+      allDecks.forEach(dk => {
+        if (dk.domain && dk.domain.includes(s)) {
+          dk.cards.forEach(c => {
+            if (progress.flaggedCards[c.id]) savedCards++;
+          });
+        }
+      });
+
+      // Weighted accuracy combines Quiz (2x) + Duel (1x) historical hits vs misses
+      const weightedTries = qHistTries * 2 + dHistTries;
+      const weightedMisses = qHistMisses * 2 + dHistMisses;
+      const effAcc = weightedTries > 0
+        ? Math.max(0, Math.min(100, Math.round(((weightedTries - weightedMisses) / weightedTries) * 100)))
+        : null;
+
+      const quizAcc = qTried > 0 ? Math.round((qRight / qTried) * 100) : null;
+      const unseenRatio = (qs.length + ds.length) > 0
+        ? ((qs.length - qTried) + (ds.length - dDone)) / (qs.length + ds.length)
+        : 0;
+
+      // Hill-climb priority: higher = needs focus most urgently
+      const weightFactor = (sMeta.weight || 16) / 16;
+      const errorGap = effAcc === null ? 38 : (100 - effAcc);
+      const activePenalty = qActiveMissed * 20 + dTricky * 12;
+      const savedPenalty = Math.min(savedCards, 6) * 2.5;
+      const priority = Math.round((errorGap * 1.15 + activePenalty + unseenRatio * 18 + savedPenalty) * weightFactor);
+
+      let status = 'open';
+      if (qActiveMissed > 0 || dTricky > 0 || (effAcc !== null && effAcc < 75)) {
+        status = 'focus';
+      } else if (effAcc !== null && effAcc < 90) {
+        status = 'build';
+      } else if (effAcc !== null && (qTried >= 3 || dDone >= 4)) {
+        status = 'strong';
+      }
+
+      return {
+        sec: s,
+        label: sMeta.label || s,
+        weight: sMeta.weight || 16,
+        qTried,
+        qRight,
+        qTotal: qs.length,
+        qActiveMissed,
+        qHistMisses,
+        dDone,
+        dTotal: ds.length,
+        dTricky,
+        dHistMisses,
+        savedCards,
+        quizAcc,
+        effAcc,
+        priority,
+        status
+      };
+    });
+
+    const secPriorityMap = {};
+    rows.forEach(r => { secPriorityMap[r.sec] = r.priority; });
+
+    const sortedByPriority = rows.slice().sort((a, b) => b.priority - a.priority);
+    const weakTopics = Object.values(topicMap)
+      .filter(t => t.misses > 0 || t.activeMiss > 0)
+      .sort((a, b) => (b.activeMiss * 10 + b.misses * 4) - (a.activeMiss * 10 + a.misses * 4))
+      .slice(0, 6);
+
+    const totalQTried = rows.reduce((s, r) => s + r.qTried, 0);
+    const totalQRight = rows.reduce((s, r) => s + r.qRight, 0);
+    const totalActiveQueue = rows.reduce((s, r) => s + r.qActiveMissed + r.dTricky, 0);
+
+    return {
+      rows,
+      sortedByPriority,
+      topFocus: sortedByPriority[0] || null,
+      secPriorityMap,
+      weakTopics,
+      overallQuizAcc: totalQTried > 0 ? Math.round((totalQRight / totalQTried) * 100) : null,
+      totalActiveQueue
+    };
+  }
+
+  function dealChillRound(allowRefreshPass = false) {
     const all = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
+    ui.duelRefreshPass = !!allowRefreshPass;
     if (!all.length) {
       ui.duelRoundIds = [];
       ui.duelIdx = 0;
@@ -846,14 +1079,41 @@
       ui.duelRoundDone = false;
       return;
     }
-    const tricky = shuffleCopy(all.filter(d => !!progress.trickyDuels[d.id]));
-    const unseen = shuffleCopy(all.filter(d => !progress.doneDuels[d.id] && !progress.trickyDuels[d.id]));
-    const done = shuffleCopy(all.filter(d => !!progress.doneDuels[d.id] && !progress.trickyDuels[d.id]));
+
+    const diag = computeDiagnostics();
+    const prio = diag.secPriorityMap || {};
+
+    if (allowRefreshPass) {
+      // Explicit post-mastery review pass weighted toward historically missed & weakest sections
+      const scored = all.map(d => {
+        const st = getItemStat('d', d.id);
+        const s = (prio[d.sec] || 20) + st.misses * 25 + Math.random() * 35;
+        return { d, s };
+      }).sort((a, b) => b.s - a.s);
+      ui.duelRoundIds = scored.slice(0, 10).map(x => x.d.id);
+      ui.duelIdx = 0;
+      ui.duelSessionPicks = {};
+      ui.duelRoundDone = false;
+      return;
+    }
+
+    // Missed/tricky items: oldest-seen first so muscle memory is spaced cleanly
+    const tricky = all
+      .filter(d => !!progress.trickyDuels[d.id])
+      .sort((a, b) => (getItemStat('d', a.id).lastAt || 0) - (getItemStat('d', b.id).lastAt || 0));
+
+    // Unseen items: hill-climb weighted toward weakest sections + light shuffle jitter
+    const unseen = all
+      .filter(d => !progress.doneDuels[d.id] && !progress.trickyDuels[d.id])
+      .map(d => ({ d, score: (prio[d.sec] || 20) + Math.random() * 22 }))
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.d);
+
+    // STRICT NO-REPEAT: never mix already-mastered items into a round while unseen/tricky remain
     const ordered = [
       ...tricky.slice(0, 3),
       ...unseen,
-      ...tricky.slice(3),
-      ...done
+      ...tricky.slice(3)
     ].slice(0, 10);
 
     ui.duelRoundIds = ordered.map(d => d.id);
@@ -866,14 +1126,18 @@
     const all = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
     if (!all.length) return [];
     if (ui.duelFilter === 'ROUND10') {
+      const hasRemaining = all.some(d => !progress.doneDuels[d.id] || !!progress.trickyDuels[d.id]);
+      if (!ui.duelRefreshPass && !hasRemaining && Object.keys(ui.duelSessionPicks || {}).length === 0) {
+        return [];
+      }
       if (!Array.isArray(ui.duelRoundIds) || !ui.duelRoundIds.length) {
-        dealChillRound();
+        dealChillRound(ui.duelRefreshPass);
       }
       const byId = {};
       all.forEach(d => { byId[d.id] = d; });
       const resolved = ui.duelRoundIds.map(id => byId[id]).filter(Boolean);
-      if (!resolved.length) {
-        dealChillRound();
+      if (!resolved.length && (hasRemaining || ui.duelRefreshPass)) {
+        dealChillRound(ui.duelRefreshPass);
         return ui.duelRoundIds.map(id => byId[id]).filter(Boolean);
       }
       return resolved;
@@ -883,6 +1147,23 @@
       return all.filter(d => !!progress.trickyDuels[d.id] || ui.duelSessionPicks[d.id] !== undefined);
     }
     return all.filter(d => d.sec === ui.duelFilter);
+  }
+
+  function buildWeakestQuizQueue() {
+    const all = (DATA && Array.isArray(DATA.questions)) ? DATA.questions : [];
+    const diag = computeDiagnostics();
+    const prio = diag.secPriorityMap || {};
+
+    const missed = all
+      .filter(q => !!progress.missedQs[q.id])
+      .sort((a, b) => (prio[b.sec] || 0) - (prio[a.sec] || 0));
+
+    const unanswered = all
+      .filter(q => progress.answers[q.id] === undefined && !progress.missedQs[q.id])
+      .sort((a, b) => (prio[b.sec] || 0) - (prio[a.sec] || 0));
+
+    ui.quizWeakIds = [...missed, ...unanswered].map(q => q.id);
+    ui.qIdx = 0;
   }
 
   function getQuizSets() {
@@ -927,9 +1208,7 @@
       const nextP = DATA.principles.findIndex(p => !progress.donePrinciples[p.id]);
       ui.pIdx = nextP !== -1 ? nextP : 0;
     }
-    if (!ui.duelRoundIds || !ui.duelRoundIds.length) {
-      dealChillRound();
-    }
+    dealChillRound(false);
 
     if (restoreSavedUi) {
       const saved = loadSavedUiState();
@@ -945,12 +1224,24 @@
         if (typeof saved.duelFilter === 'string') {
           ui.duelFilter = saved.duelFilter;
         }
-        if (Array.isArray(saved.duelRoundIds) && saved.duelRoundIds.length) {
-          ui.duelRoundIds = saved.duelRoundIds;
+        // Only restore un-mastered Chill Round items; if any were mastered, deal fresh no-repeat round
+        if (ui.duelFilter === 'ROUND10') {
+          if (Array.isArray(saved.duelRoundIds) && saved.duelRoundIds.length) {
+            const unmastered = saved.duelRoundIds.filter(id => !progress.doneDuels[id] || !!progress.trickyDuels[id]);
+            if (unmastered.length === saved.duelRoundIds.length && unmastered.length > 0) {
+              ui.duelRoundIds = unmastered;
+            } else {
+              dealChillRound(false);
+            }
+          } else {
+            dealChillRound(false);
+          }
         }
         const activeDuels = getActiveDuels();
-        if (typeof saved.duelIdx === 'number' && saved.duelIdx >= 0 && saved.duelIdx < activeDuels.length) {
+        if (ui.duelFilter !== 'ROUND10' && typeof saved.duelIdx === 'number' && saved.duelIdx >= 0 && saved.duelIdx < activeDuels.length) {
           ui.duelIdx = saved.duelIdx;
+        } else if (ui.duelFilter === 'ROUND10') {
+          ui.duelIdx = 0;
         }
         if (typeof saved.timerOn === 'boolean') {
           ui.timerOn = saved.timerOn;
@@ -975,16 +1266,19 @@
           ui.pStep = saved.pStep;
         }
         const validSets = getQuizSets();
-        if (saved.quizFilter === 'ALL' || saved.quizFilter === 'MISSED' || validSets.includes(saved.quizFilter)) {
+        if (saved.quizFilter === 'ALL' || saved.quizFilter === 'MISSED' || saved.quizFilter === 'WEAKEST' || validSets.includes(saved.quizFilter)) {
           ui.quizFilter = saved.quizFilter;
-          const qs = getActiveQuestions();
-          if (typeof saved.qIdx === 'number' && saved.qIdx >= 0 && saved.qIdx < qs.length) {
-            // If saved on ALL Q1 when Q1 is already answered, jump to next unanswered instead of Q1
-            if (ui.quizFilter === 'ALL' && saved.qIdx === 0 && qs[0] && progress.answers[qs[0].id] !== undefined) {
-              const openAll = qs.findIndex(item => progress.answers[item.id] === undefined);
-              ui.qIdx = openAll !== -1 ? openAll : 0;
-            } else {
-              ui.qIdx = saved.qIdx;
+          if (ui.quizFilter === 'WEAKEST') {
+            buildWeakestQuizQueue();
+          } else {
+            const qs = getActiveQuestions();
+            if (typeof saved.qIdx === 'number' && saved.qIdx >= 0 && saved.qIdx < qs.length) {
+              if (ui.quizFilter === 'ALL' && saved.qIdx === 0 && qs[0] && progress.answers[qs[0].id] !== undefined) {
+                const openAll = qs.findIndex(item => progress.answers[item.id] === undefined);
+                ui.qIdx = openAll !== -1 ? openAll : 0;
+              } else {
+                ui.qIdx = saved.qIdx;
+              }
             }
           }
         }
@@ -1057,7 +1351,13 @@
   function getActiveQuestions() {
     if (ui.quizFilter === 'ALL') return DATA.questions;
     if (ui.quizFilter === 'MISSED') {
-      return DATA.questions.filter(q => progress.missedQs[q.id]);
+      return DATA.questions.filter(q => !!progress.missedQs[q.id] || !!(ui.quizSessionTouched && ui.quizSessionTouched[q.id]));
+    }
+    if (ui.quizFilter === 'WEAKEST') {
+      if (!Array.isArray(ui.quizWeakIds)) buildWeakestQuizQueue();
+      const byId = {};
+      DATA.questions.forEach(q => { byId[q.id] = q; });
+      return (ui.quizWeakIds || []).map(id => byId[id]).filter(Boolean);
     }
     return DATA.questions.filter(q => (q.set || q.sec) === ui.quizFilter);
   }
@@ -1113,60 +1413,171 @@
 
   function renderTimeDrawer(stats) {
     if (!ui.showTimeDrawer) return '';
-    const today = new Date();
-    const todayKey = localDateKey(today);
-    const yest = new Date(today);
-    yest.setDate(yest.getDate() - 1);
-    const yestKey = localDateKey(yest);
+    const isRadar = ui.drawerTab !== 'log';
+    const diag = isRadar ? computeDiagnostics() : null;
 
-    const weekHtml = stats.week.map(w => `
-      <div class="day-dot">
-        <span>${w.label}</span>
-        <div class="day-circle ${w.lit ? 'lit' : ''} ${w.isToday ? 'today-ring' : ''}">
-          ${w.lit ? '✓' : ''}
+    let bodyHtml = '';
+    if (isRadar) {
+      const top = diag.topFocus;
+      const statusLabel = st => {
+        if (st === 'focus') return 'Focus';
+        if (st === 'build') return 'Build';
+        if (st === 'strong') return 'Strong';
+        return 'Open';
+      };
+      const barColor = st => {
+        if (st === 'focus') return 'var(--danger)';
+        if (st === 'build') return 'var(--warn)';
+        if (st === 'strong') return 'var(--success)';
+        return 'var(--primary)';
+      };
+
+      const focusCardHtml = top
+        ? `
+          <div class="diag-focus-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span style="font-size:11.5px;font-weight:800;color:var(--primary);letter-spacing:0.04em;">HILL-CLIMB #1 FOCUS</span>
+              <span style="font-size:12px;font-weight:700;color:var(--muted);">
+                ${diag.overallQuizAcc !== null ? `Quiz ${diag.overallQuizAcc}%` : 'Ready'} • ${diag.totalActiveQueue} in retry queue
+              </span>
+            </div>
+            <div>
+              <div style="font-size:15.5px;font-weight:800;">${top.sec} • ${fmtText(top.label)}</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:2px;">
+                Quiz ${top.qRight}/${top.qTried} (${top.qTotal - top.qTried} unseen) • Duels ${top.dDone}/${top.dTotal}${top.qActiveMissed + top.dTricky > 0 ? ` • ${top.qActiveMissed + top.dTricky} to lock in` : ''}
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <button class="primary-btn" id="diag-drill-weakest-btn" style="padding:10px 8px;font-size:13.5px;">🎯 Drill Weakest</button>
+              <button class="sec-btn" id="diag-smart-duel-btn" style="padding:10px 8px;font-size:13.5px;">⚔️ Smart Duel</button>
+            </div>
+          </div>
+        `
+        : '';
+
+      const secRowsHtml = diag.sortedByPriority.map(r => {
+        const barPct = r.effAcc !== null ? Math.max(8, r.effAcc) : Math.max(8, Math.round(((r.qTried + r.dDone) / Math.max(1, r.qTotal + r.dTotal)) * 100));
+        const accLabel = r.effAcc !== null ? `${r.effAcc}%` : 'New';
+        const missNote = (r.qActiveMissed + r.dTricky) > 0
+          ? ` • <span style="color:var(--warn);font-weight:700;">${r.qActiveMissed + r.dTricky} retry</span>`
+          : '';
+        return `
+          <button class="diag-sec-row" data-diag-sec="${r.sec}">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span style="font-size:13.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.sec} • ${fmtText(r.label)}</span>
+              <span class="diag-pill ${r.status}">${statusLabel(r.status)} • ${accLabel}</span>
+            </div>
+            <div class="diag-bar-track">
+              <div class="diag-bar-fill" style="width:${barPct}%;background:${barColor(r.status)};"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);gap:6px;">
+              <span>Practice ${r.qRight}/${r.qTried} (${r.qTotal} total) • Duel ${r.dDone}/${r.dTotal}${missNote}</span>
+              <span style="white-space:nowrap;">${r.weight}% wt →</span>
+            </div>
+          </button>
+        `;
+      }).join('');
+
+      const topicsHtml = diag.weakTopics.length
+        ? `
+          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.03em;margin-top:2px;">
+            FRICTION SUB-TOPICS
+          </div>
+          <div class="diag-topic-wrap">
+            ${diag.weakTopics.map(t => `
+              <span class="diag-topic-chip">
+                <span>${fmtText(t.topic)}</span>
+                <span style="color:var(--warn);font-weight:800;">${t.misses}×</span>
+              </span>
+            `).join('')}
+          </div>
+        `
+        : `<div style="font-size:12.5px;color:var(--muted);">No friction topics yet — missed picks and questions are tracked here automatically.</div>`;
+
+      bodyHtml = `
+        ${focusCardHtml}
+        <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.03em;">
+          BY SECTION (WEAKEST FIRST — TAP TO PRACTICE)
         </div>
-      </div>
-    `).join('');
-
-    const dateSet = new Set();
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      dateSet.add(localDateKey(d));
-    }
-    Object.keys(progress.dailySeconds || {}).forEach(k => dateSet.add(k));
-    Object.keys(progress.dailyActivity || {}).forEach(k => dateSet.add(k));
-
-    const sortedDays = Array.from(dateSet).sort((a, b) => b.localeCompare(a));
-
-    const dayRowsHtml = sortedDays.map(dk => {
-      const secs = (progress.dailySeconds && progress.dailySeconds[dk]) || 0;
-      const reps = (progress.dailyActivity && progress.dailyActivity[dk]) || 0;
-      const pct = Math.min(100, Math.round((secs / 3600) * 100));
-      const isToday = dk === todayKey;
-      const repsTag = reps > 0 ? ` • ${reps} ${reps === 1 ? 'item' : 'items'}` : '';
-      return `
-        <div class="day-log-row">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <span style="font-size:14px;font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--text)' : 'var(--muted)'};">
-              ${formatDateHeading(dk, todayKey, yestKey)}
-            </span>
-            <span style="font-size:13.5px;font-weight:700;">
-              <span ${isToday ? 'id="today-row-time"' : ''}>${formatCalmMinutes(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
-            </span>
-          </div>
-          <div class="day-log-bar-track">
-            <div class="day-log-bar-fill" ${isToday ? 'id="today-row-bar"' : ''} style="width:${pct}%;"></div>
-          </div>
+        <div class="day-log-list">
+          ${secRowsHtml}
+          ${topicsHtml}
         </div>
       `;
-    }).join('');
+    } else {
+      const today = new Date();
+      const todayKey = localDateKey(today);
+      const yest = new Date(today);
+      yest.setDate(yest.getDate() - 1);
+      const yestKey = localDateKey(yest);
+
+      const weekHtml = stats.week.map(w => `
+        <div class="day-dot">
+          <span>${w.label}</span>
+          <div class="day-circle ${w.lit ? 'lit' : ''} ${w.isToday ? 'today-ring' : ''}">
+            ${w.lit ? '✓' : ''}
+          </div>
+        </div>
+      `).join('');
+
+      const dateSet = new Set();
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        dateSet.add(localDateKey(d));
+      }
+      Object.keys(progress.dailySeconds || {}).forEach(k => dateSet.add(k));
+      Object.keys(progress.dailyActivity || {}).forEach(k => dateSet.add(k));
+
+      const sortedDays = Array.from(dateSet).sort((a, b) => b.localeCompare(a));
+
+      const dayRowsHtml = sortedDays.map(dk => {
+        const secs = (progress.dailySeconds && progress.dailySeconds[dk]) || 0;
+        const reps = (progress.dailyActivity && progress.dailyActivity[dk]) || 0;
+        const pct = Math.min(100, Math.round((secs / 3600) * 100));
+        const isToday = dk === todayKey;
+        const repsTag = reps > 0 ? ` • ${reps} ${reps === 1 ? 'item' : 'items'}` : '';
+        return `
+          <div class="day-log-row">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span style="font-size:14px;font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--text)' : 'var(--muted)'};">
+                ${formatDateHeading(dk, todayKey, yestKey)}
+              </span>
+              <span style="font-size:13.5px;font-weight:700;">
+                <span ${isToday ? 'id="today-row-time"' : ''}>${formatCalmMinutes(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
+              </span>
+            </div>
+            <div class="day-log-bar-track">
+              <div class="day-log-bar-fill" ${isToday ? 'id="today-row-bar"' : ''} style="width:${pct}%;"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      bodyHtml = `
+        <div class="drawer-week-box">
+          <div class="week-dots">${weekHtml}</div>
+        </div>
+
+        <div style="font-size:12.5px;color:var(--muted);">
+          Quietly logged in the background while you study.
+        </div>
+
+        <div style="font-size:13px;font-weight:800;color:var(--muted);margin-top:2px;">
+          BY DAY
+        </div>
+
+        <div class="day-log-list">
+          ${dayRowsHtml}
+        </div>
+      `;
+    }
 
     return `
       <div class="drawer-backdrop" id="time-drawer-backdrop">
-        <div class="drawer-sheet" role="dialog" aria-label="Daily Streak & Log">
+        <div class="drawer-sheet" role="dialog" aria-label="Progress and Diagnostics">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <div style="font-size:18px;font-weight:800;">🔥 Daily Streak & Log</div>
+            <div style="font-size:18px;font-weight:800;">🔥 Progress & Radar</div>
             <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
           </div>
 
@@ -1185,21 +1596,12 @@
             </div>
           </div>
 
-          <div class="drawer-week-box">
-            <div class="week-dots">${weekHtml}</div>
+          <div class="drawer-seg" role="tablist">
+            <button class="drawer-seg-btn ${isRadar ? 'active' : ''}" data-drawer-tab="radar">🎯 Weakness Radar</button>
+            <button class="drawer-seg-btn ${!isRadar ? 'active' : ''}" data-drawer-tab="log">🔥 Daily Log</button>
           </div>
 
-          <div style="font-size:12.5px;color:var(--muted);">
-            Quietly logged in the background while you study.
-          </div>
-
-          <div style="font-size:13px;font-weight:800;color:var(--muted);margin-top:2px;">
-            BY DAY
-          </div>
-
-          <div class="day-log-list">
-            ${dayRowsHtml}
-          </div>
+          ${bodyHtml}
         </div>
       </div>
     `;
@@ -1258,12 +1660,13 @@
     if (ui.picker === 'quiz') {
       const missedCount = Object.values(progress.missedQs).filter(Boolean).length;
       const allAnswered = DATA.questions.filter(q => progress.answers[q.id] !== undefined).length;
+      const openWeakCount = DATA.questions.filter(q => !!progress.missedQs[q.id] || progress.answers[q.id] === undefined).length;
       const allDone = DATA.questions.length > 0 && allAnswered === DATA.questions.length;
       const sets = getQuizSets();
       const activeQs = getActiveQuestions();
       const activeLabel = ui.quizFilter === 'ALL'
         ? 'All Sections'
-        : (ui.quizFilter === 'MISSED' ? 'Missed Items' : ui.quizFilter);
+        : (ui.quizFilter === 'MISSED' ? 'Missed Items' : (ui.quizFilter === 'WEAKEST' ? 'Weakest First' : ui.quizFilter));
 
       const qPillsHtml = activeQs.length
         ? `
@@ -1309,13 +1712,20 @@
             </div>
             <div class="picker-list">
               ${qPillsHtml}
-              <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''} ${allDone && ui.quizFilter !== 'ALL' ? 'done-item' : ''}" data-pick-qfilter="ALL">
-                <div style="font-size:14.5px;font-weight:700;">${allDone ? '✓ ' : (ui.quizFilter === 'ALL' ? '▶ ' : '')}All Sections</div>
-                <span style="font-size:13px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
+              <button class="picker-item ${ui.quizFilter === 'WEAKEST' ? 'active' : ''}" data-pick-qfilter="WEAKEST">
+                <div>
+                  <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'WEAKEST' ? '▶ ' : ''}🎯 Weakest First (Adaptive)</div>
+                  <div style="font-size:12px;color:var(--muted);margin-top:2px;">Missed + unseen prioritized by weakest sections</div>
+                </div>
+                <span style="font-size:13px;font-weight:700;color:var(--primary);white-space:nowrap;">${openWeakCount}</span>
               </button>
               <button class="picker-item ${ui.quizFilter === 'MISSED' ? 'active' : ''}" data-pick-qfilter="MISSED">
                 <div style="font-size:14.5px;font-weight:700;">${ui.quizFilter === 'MISSED' ? '▶ ' : ''}🔁 Missed Items</div>
-                <span style="font-size:13px;font-weight:700;color:var(--muted);white-space:nowrap;">${missedCount}</span>
+                <span style="font-size:13px;font-weight:700;color:${missedCount ? 'var(--warn)' : 'var(--muted)'};white-space:nowrap;">${missedCount}</span>
+              </button>
+              <button class="picker-item ${ui.quizFilter === 'ALL' ? 'active' : ''} ${allDone && ui.quizFilter !== 'ALL' ? 'done-item' : ''}" data-pick-qfilter="ALL">
+                <div style="font-size:14.5px;font-weight:700;">${allDone ? '✓ ' : (ui.quizFilter === 'ALL' ? '▶ ' : '')}All Sections</div>
+                <span style="font-size:13px;font-weight:700;color:${allDone ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${allAnswered}/${DATA.questions.length}</span>
               </button>
               ${setRows}
             </div>
@@ -1403,6 +1813,8 @@
       const allDuels = DATA.duels || [];
       const doneTotal = allDuels.filter(d => !!progress.doneDuels[d.id]).length;
       const trickyTotal = allDuels.filter(d => !!progress.trickyDuels[d.id]).length;
+      const unseenTotal = allDuels.filter(d => !progress.doneDuels[d.id] && !progress.trickyDuels[d.id]).length;
+      const remTotal = unseenTotal + trickyTotal;
       const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
 
       const secRows = secs.map(s => {
@@ -1425,20 +1837,20 @@
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
               <div style="font-size:18px;font-weight:800;">⚔️ Quick Duel Mode</div>
               <div style="display:flex;align-items:center;gap:7px;">
-                <button class="icon-btn" id="reshuffle-chill-btn" style="padding:7px 10px;font-size:12.5px;">↻ Fresh 10</button>
+                <button class="icon-btn" id="reshuffle-chill-btn" style="padding:7px 10px;font-size:12.5px;">↻ Fresh Round</button>
                 <button class="icon-btn" id="picker-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
               </div>
             </div>
             <div class="picker-list">
               <button class="picker-item ${ui.duelFilter === 'ROUND10' ? 'active' : ''}" data-pick-duelfilter="ROUND10">
                 <div>
-                  <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'ROUND10' ? '▶ ' : ''}☕ 10-Pick Chill Round</div>
-                  <div style="font-size:12px;color:var(--muted);margin-top:2px;">Bite-sized evening mix (unseen + tricky first)</div>
+                  <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'ROUND10' ? '▶ ' : ''}☕ Smart Chill Round</div>
+                  <div style="font-size:12px;color:var(--muted);margin-top:2px;">No repeats for mastered • Missed + weakest sections first</div>
                 </div>
-                <span style="font-size:13px;font-weight:700;color:var(--primary);white-space:nowrap;">10 picks</span>
+                <span style="font-size:13px;font-weight:700;color:${remTotal ? 'var(--primary)' : 'var(--success)'};white-space:nowrap;">${remTotal ? `${remTotal} left` : '✓ Done'}</span>
               </button>
               <button class="picker-item ${ui.duelFilter === 'TRICKY' ? 'active' : ''}" data-pick-duelfilter="TRICKY">
-                <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'TRICKY' ? '▶ ' : ''}🔁 Tricky Picks</div>
+                <div style="font-size:14.5px;font-weight:700;">${ui.duelFilter === 'TRICKY' ? '▶ ' : ''}🔁 Tricky Picks (2× to clear)</div>
                 <span style="font-size:13px;font-weight:700;color:${trickyTotal ? 'var(--warn)' : 'var(--muted)'};white-space:nowrap;">${trickyTotal}</span>
               </button>
               <button class="picker-item ${ui.duelFilter === 'ALL' ? 'active' : ''} ${doneTotal === allDuels.length && allDuels.length > 0 && ui.duelFilter !== 'ALL' ? 'done-item' : ''}" data-pick-duelfilter="ALL">
@@ -1712,11 +2124,19 @@
     const allDuels = DATA.duels || [];
     const doneTotal = allDuels.filter(d => !!progress.doneDuels[d.id]).length;
     const trickyCount = allDuels.filter(d => !!progress.trickyDuels[d.id]).length;
+    const unseenCount = allDuels.filter(d => !progress.doneDuels[d.id] && !progress.trickyDuels[d.id]).length;
+    const remCount = unseenCount + trickyCount;
     const list = getActiveDuels();
 
     let dropLabel = '';
     if (ui.duelFilter === 'ROUND10') {
-      dropLabel = `☕ Chill Round (${Math.min(ui.duelIdx + 1, Math.max(1, list.length))}/${list.length || 10})`;
+      if (ui.duelRefreshPass) {
+        dropLabel = `↻ Review Pass (${Math.min(ui.duelIdx + 1, Math.max(1, list.length))}/${list.length || 10})`;
+      } else if (!list.length) {
+        dropLabel = `✓ All ${allDuels.length} Mastered`;
+      } else {
+        dropLabel = `☕ Chill Round (${Math.min(ui.duelIdx + 1, list.length)}/${list.length})`;
+      }
     } else if (ui.duelFilter === 'TRICKY') {
       dropLabel = `🔁 Tricky Picks (${list.length})`;
     } else if (ui.duelFilter === 'ALL') {
@@ -1744,17 +2164,20 @@
 
     if (ui.duelFilter === 'ROUND10' && ui.duelRoundDone && list.length > 0) {
       const roundHits = list.filter(item => ui.duelSessionPicks[item.id] === item.ans).length;
+      const nextBtnHtml = remCount > 0
+        ? `<button class="primary-btn" id="duel-new-round-btn" style="padding:14px 16px;">⚡ Deal Next ${Math.min(10, remCount)} Unseen/Tricky</button>`
+        : `<button class="primary-btn" id="duel-refresh-pass-btn" style="padding:14px 16px;">↻ Start Fresh 10-Pick Review</button>`;
       return `
         ${topBarHtml}
         <div class="duel-prompt-card" style="gap:14px;">
-          <div style="font-size:34px;line-height:1;">☕✨</div>
-          <div style="font-size:22px;font-weight:800;">Chill Round Complete!</div>
+          <div style="font-size:34px;line-height:1;">${remCount === 0 ? '🏆✨' : '☕✨'}</div>
+          <div style="font-size:22px;font-weight:800;">${remCount === 0 ? 'All Duels Mastered!' : 'Chill Round Complete!'}</div>
           <div style="font-size:16px;color:var(--muted);line-height:1.5;max-width:420px;">
             You nailed <strong style="color:var(--success);">${roundHits}/${list.length}</strong> quick picks this round.<br/>
-            Overall bank mastered: <strong>${doneTotal}/${allDuels.length}</strong>
+            Bank mastered: <strong>${doneTotal}/${allDuels.length}</strong>${remCount > 0 ? ` • ${unseenCount} unseen, ${trickyCount} tricky left` : ''}
           </div>
           <div style="display:flex;flex-direction:column;gap:9px;width:100%;max-width:320px;margin-top:4px;">
-            <button class="primary-btn" id="duel-new-round-btn" style="padding:14px 16px;">⚡ Deal Another 10</button>
+            ${nextBtnHtml}
             ${trickyCount > 0 ? `<button class="sec-btn" id="duel-go-tricky-btn" style="padding:12px 14px;">🔁 Review ${trickyCount} Tricky ${trickyCount === 1 ? 'Pick' : 'Picks'}</button>` : ''}
           </div>
         </div>
@@ -1762,12 +2185,25 @@
     }
 
     if (!list.length) {
+      if (ui.duelFilter === 'ROUND10') {
+        return `
+          ${topBarHtml}
+          <div class="duel-prompt-card" style="gap:14px;">
+            <div style="font-size:36px;line-height:1;">🏆✨</div>
+            <div style="font-size:22px;font-weight:800;">All ${allDuels.length} Duels Mastered!</div>
+            <div style="color:var(--muted);font-size:15.5px;line-height:1.5;max-width:400px;">
+              You’ve cleared every single duel cleanly with zero tricky picks left. Want an optional review pass weighted toward your toughest topics?
+            </div>
+            <button class="primary-btn" id="duel-refresh-pass-btn" style="padding:13px 18px;margin-top:4px;">↻ Start 10-Pick Review Pass</button>
+          </div>
+        `;
+      }
       return `
         ${topBarHtml}
         <div class="duel-prompt-card" style="gap:12px;">
           <div style="font-size:20px;font-weight:800;">✨ Zero tricky duels left!</div>
-          <div style="color:var(--muted);font-size:15.5px;max-width:380px;">You’ve cleared every tricky binary pick. Ready for a fresh 10-card chill round?</div>
-          <button class="primary-btn" id="duel-new-round-btn" style="padding:13px 18px;margin-top:4px;">☕ Deal 10-Pick Chill Round</button>
+          <div style="color:var(--muted);font-size:15.5px;max-width:380px;">You’ve cleared every tricky binary pick. Ready for fresh unseen duels?</div>
+          <button class="primary-btn" id="duel-new-round-btn" style="padding:13px 18px;margin-top:4px;">☕ Open Smart Chill Round</button>
         </div>
       `;
     }
@@ -1777,6 +2213,8 @@
     const picked = ui.duelSessionPicks[d.id];
     const answered = picked !== undefined;
     const isMastered = !!progress.doneDuels[d.id];
+    const isTricky = !!progress.trickyDuels[d.id];
+    const st = getItemStat('d', d.id);
 
     const dotsHtml = list.map((item, idx) => {
       let cls = 'cdot';
@@ -1804,11 +2242,23 @@
       return '';
     };
 
+    let masteryNoteHtml = '';
+    if (answered) {
+      if (picked !== d.ans) {
+        masteryNoteHtml = `<div style="margin-top:6px;font-size:12.5px;font-weight:700;color:var(--warn);">🔁 Added to retry queue — 2 clean hits to lock in</div>`;
+      } else if (isTricky) {
+        masteryNoteHtml = `<div style="margin-top:6px;font-size:12.5px;font-weight:700;color:var(--primary);">✓ 1/2 clean — will return once more to lock into muscle memory</div>`;
+      } else if (st.misses > 0 && st.streak >= 2) {
+        masteryNoteHtml = `<div style="margin-top:6px;font-size:12.5px;font-weight:700;color:var(--success);">✓ 2/2 locked in — retired from retry queue!</div>`;
+      }
+    }
+
     const feedbackHtml = answered
       ? `
         <div class="duel-feedback" style="border-color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">
           <strong style="color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">${picked === d.ans ? '✓ Spot on:' : '💡 Quick rule:'}</strong>
           <span style="margin-left:4px;">${fmtText(d.why)}</span>
+          ${masteryNoteHtml}
         </div>
       `
       : '';
@@ -1820,9 +2270,12 @@
       } else if (ui.duelIdx < list.length - 1) {
         centerActionHtml = `<button class="primary-btn" id="duel-next-main" style="padding:14px 10px;">Next Duel →</button>`;
       } else {
-        centerActionHtml = `<button class="success-btn" id="duel-new-round-btn" style="padding:14px 10px;">☕ Deal Fresh 10 →</button>`;
+        centerActionHtml = `<button class="success-btn" id="duel-new-round-btn" style="padding:14px 10px;">☕ Next Round →</button>`;
       }
     }
+
+    const topicPart = d.topic ? ` • ${fmtText(d.topic)}` : '';
+    const retryTag = isTricky && !answered ? ` • 🔁 Retry (${st.streak}/2)` : '';
 
     return `
       ${topBarHtml}
@@ -1830,7 +2283,7 @@
 
       <div class="duel-stage">
         <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}">
-          <span class="badge" style="${isMastered ? 'color:var(--success);' : ''}">${isMastered ? '✓ ' : ''}${d.sec} • ${ui.duelIdx + 1}/${list.length}</span>
+          <span class="badge" style="${isMastered ? 'color:var(--success);' : (isTricky ? 'color:var(--warn);' : '')}">${isMastered ? '✓ ' : ''}${d.sec}${topicPart} • ${ui.duelIdx + 1}/${list.length}${retryTag}</span>
           <div class="duel-prompt-text">${fmtText(d.prompt)}</div>
         </div>
 
@@ -1938,7 +2391,7 @@
 
     const activeFilterLabel = ui.quizFilter === 'ALL'
       ? 'All Sections'
-      : (ui.quizFilter === 'MISSED' ? `🔁 Missed (${missedCount})` : ui.quizFilter);
+      : (ui.quizFilter === 'MISSED' ? `🔁 Missed (${missedCount})` : (ui.quizFilter === 'WEAKEST' ? '🎯 Weakest First' : ui.quizFilter));
 
     if (!qs.length) {
       return `
@@ -1949,8 +2402,8 @@
           </button>
         </div>
         <div class="quiz-card" style="justify-content:center;align-items:center;text-align:center;padding:36px 20px;">
-          <div style="font-size:18px;font-weight:700;">Zero missed items right now! 🎉</div>
-          <div style="font-size:15.5px;color:var(--muted);">Any question you miss lands here automatically until you master it.</div>
+          <div style="font-size:18px;font-weight:700;">${ui.quizFilter === 'WEAKEST' ? 'All practice questions cleared! 🎉' : 'Zero missed items right now! 🎉'}</div>
+          <div style="font-size:15.5px;color:var(--muted);">${ui.quizFilter === 'WEAKEST' ? 'Zero unanswered or missed questions left across all sections.' : 'Any question you miss lands here automatically until you clear it cleanly twice.'}</div>
         </div>
       `;
     }
@@ -1958,12 +2411,14 @@
     if (ui.qIdx >= qs.length) ui.qIdx = 0;
     const q = qs[ui.qIdx];
     const chosen = progress.answers[q.id];
+    const qStat = getItemStat('q', q.id);
+    const isActiveMissed = !!progress.missedQs[q.id];
 
     const answeredList = qs.filter(item => progress.answers[item.id] !== undefined);
     const rightCount = answeredList.filter(item => progress.answers[item.id] === item.ans).length;
-    const setComplete = ui.quizFilter !== 'MISSED' && qs.length > 0 && answeredList.length === qs.length;
+    const setComplete = ui.quizFilter !== 'MISSED' && ui.quizFilter !== 'WEAKEST' && qs.length > 0 && answeredList.length === qs.length;
     const hasOpenAnywhere = DATA.questions.some(item => progress.answers[item.id] === undefined);
-    const showResumeBtn = chosen !== undefined && ui.quizFilter !== 'MISSED' && hasOpenAnywhere;
+    const showResumeBtn = chosen !== undefined && ui.quizFilter !== 'MISSED' && ui.quizFilter !== 'WEAKEST' && hasOpenAnywhere;
     const m = Math.floor(ui.secLeft / 60);
     const s = String(ui.secLeft % 60).padStart(2, '0');
 
@@ -1995,9 +2450,23 @@
       return `<button class="${cls}" data-opt="${idx}">${prefix}${fmtText(opt)}</button>`;
     }).join('');
 
+    let qMasteryNoteHtml = '';
+    if (chosen !== undefined) {
+      if (chosen !== q.ans) {
+        qMasteryNoteHtml = `<div style="margin-top:8px;font-size:12.5px;font-weight:700;color:var(--warn);">🔁 Added to Missed & Weakness Radar — 2 clean retries to clear</div>`;
+      } else if (isActiveMissed) {
+        qMasteryNoteHtml = `<div style="margin-top:8px;font-size:12.5px;font-weight:700;color:var(--primary);">✓ 1/2 clean retry — stays in Missed for 1 more pass to lock in</div>`;
+      } else if (qStat.misses > 0 && qStat.streak >= 2) {
+        qMasteryNoteHtml = `<div style="margin-top:8px;font-size:12.5px;font-weight:700;color:var(--success);">✓ 2/2 locked in — cleared from Missed queue!</div>`;
+      }
+    }
+
     const rightControlBtn = (ui.qIdx === qs.length - 1 && setComplete && nextQuizSec)
       ? `<button class="success-btn" id="next-qsec-btn" style="padding:14px 12px;">✓ Done • ${nextQuizSec} →</button>`
       : `<button class="primary-btn" id="q-next" style="padding:14px 12px;" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>`;
+
+    const qTopicPart = q.topic ? ` • ${fmtText(q.topic)}` : '';
+    const qRetryBadge = isActiveMissed ? ` • 🔁 Retry (${qStat.streak}/2)` : '';
 
     return `
       <div class="selector-bar">
@@ -2014,6 +2483,9 @@
       ${qProgressHtml}
 
       <div class="quiz-card" id="quiz-card-box" style="${setComplete ? 'border-color:rgba(16,185,129,0.45);' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
+        </div>
         <div class="quiz-q">${fmtText(q.q)}</div>
         <div style="display:flex;flex-direction:column;gap:9px;">
           ${optsHtml}
@@ -2021,6 +2493,7 @@
         ${chosen !== undefined ? `
           <div class="card-tip">
             <strong>Why:</strong> ${fmtText(q.exp)}
+            ${qMasteryNoteHtml}
             <div style="margin-top:10px;">
               <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
             </div>
@@ -2232,6 +2705,59 @@
       }
     });
 
+    document.querySelectorAll('[data-drawer-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        ui.drawerTab = btn.dataset.drawerTab === 'log' ? 'log' : 'radar';
+        renderApp();
+      });
+    });
+
+    document.getElementById('diag-drill-weakest-btn')?.addEventListener('click', () => {
+      ui.showTimeDrawer = false;
+      ui.tab = 'quiz';
+      ui.quizFilter = 'WEAKEST';
+      ui.quizSessionTouched = {};
+      buildWeakestQuizQueue();
+      ui.secLeft = 120;
+      startQuizTimerIfNeeded();
+      renderApp();
+    });
+
+    document.getElementById('diag-smart-duel-btn')?.addEventListener('click', () => {
+      ui.showTimeDrawer = false;
+      ui.tab = 'duel';
+      ui.duelSub = 'duel';
+      ui.duelFilter = 'ROUND10';
+      dealChillRound(false);
+      renderApp();
+    });
+
+    document.querySelectorAll('[data-diag-sec]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const baseSec = btn.dataset.diagSec;
+        const matchingSets = getQuizSets().filter(s => s === baseSec || s.startsWith(baseSec + ' •'));
+        let chosenSet = matchingSets[0] || baseSec;
+        for (let i = 0; i < matchingSets.length; i++) {
+          const candidate = matchingSets[i];
+          const hasOpen = DATA.questions.some(q => (q.set || q.sec) === candidate && (progress.answers[q.id] === undefined || !!progress.missedQs[q.id]));
+          if (hasOpen) {
+            chosenSet = candidate;
+            break;
+          }
+        }
+        ui.showTimeDrawer = false;
+        ui.tab = 'quiz';
+        ui.quizFilter = chosenSet;
+        ui.quizSessionTouched = {};
+        const qs = getActiveQuestions();
+        const firstOpen = qs.findIndex(item => progress.answers[item.id] === undefined || !!progress.missedQs[item.id]);
+        ui.qIdx = firstOpen !== -1 ? firstOpen : 0;
+        ui.secLeft = 120;
+        startQuizTimerIfNeeded();
+        renderApp();
+      });
+    });
+
     // Cross-Device Sync Drawer handlers
     document.getElementById('sync-open-btn')?.addEventListener('click', () => {
       saveProgress(false);
@@ -2329,7 +2855,9 @@
 
     document.getElementById('reshuffle-chill-btn')?.addEventListener('click', () => {
       ui.duelFilter = 'ROUND10';
-      dealChillRound();
+      const all = (DATA && Array.isArray(DATA.duels)) ? DATA.duels : [];
+      const hasRem = all.some(d => !progress.doneDuels[d.id] || !!progress.trickyDuels[d.id]);
+      dealChillRound(!hasRem);
       ui.picker = null;
       renderApp();
     });
@@ -2365,8 +2893,9 @@
         const nextFilter = btn.dataset.pickDuelfilter;
         ui.duelFilter = nextFilter;
         if (nextFilter === 'ROUND10') {
-          dealChillRound();
+          dealChillRound(false);
         } else {
+          ui.duelRefreshPass = false;
           ui.duelSessionPicks = {};
           ui.duelRoundDone = false;
           const list = getActiveDuels();
@@ -2381,9 +2910,14 @@
     document.querySelectorAll('[data-pick-qfilter]').forEach(btn => {
       btn.addEventListener('click', () => {
         ui.quizFilter = btn.dataset.pickQfilter;
-        const qs = getActiveQuestions();
-        const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
-        ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
+        ui.quizSessionTouched = {};
+        if (ui.quizFilter === 'WEAKEST') {
+          buildWeakestQuizQueue();
+        } else {
+          const qs = getActiveQuestions();
+          const firstUnanswered = qs.findIndex(item => progress.answers[item.id] === undefined);
+          ui.qIdx = firstUnanswered !== -1 ? firstUnanswered : 0;
+        }
         ui.secLeft = 120;
         ui.picker = null;
         startQuizTimerIfNeeded();
@@ -2584,11 +3118,19 @@
             const cur = list[ui.duelIdx];
             if (!cur || ui.duelSessionPicks[cur.id] !== undefined) return;
             const picked = Number(btn.dataset.duelPick);
+            const isCorrect = picked === cur.ans;
+            const wasTricky = !!progress.trickyDuels[cur.id];
+            const st = recordItemAttempt('d', cur.id, isCorrect);
             ui.duelSessionPicks[cur.id] = picked;
             progress.duelMeta[cur.id] = Date.now();
-            if (picked === cur.ans) {
-              progress.doneDuels[cur.id] = true;
-              delete progress.trickyDuels[cur.id];
+            if (isCorrect) {
+              if (wasTricky && st.streak < 2) {
+                progress.trickyDuels[cur.id] = true;
+                delete progress.doneDuels[cur.id];
+              } else {
+                progress.doneDuels[cur.id] = true;
+                delete progress.trickyDuels[cur.id];
+              }
               ui.duelCombo = (ui.duelCombo || 0) + 1;
               try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) {}
             } else {
@@ -2632,12 +3174,19 @@
 
         document.getElementById('duel-new-round-btn')?.addEventListener('click', () => {
           ui.duelFilter = 'ROUND10';
-          dealChillRound();
+          dealChillRound(false);
+          renderApp();
+        });
+
+        document.getElementById('duel-refresh-pass-btn')?.addEventListener('click', () => {
+          ui.duelFilter = 'ROUND10';
+          dealChillRound(true);
           renderApp();
         });
 
         document.getElementById('duel-go-tricky-btn')?.addEventListener('click', () => {
           ui.duelFilter = 'TRICKY';
+          ui.duelRefreshPass = false;
           ui.duelSessionPicks = {};
           ui.duelRoundDone = false;
           ui.duelIdx = 0;
@@ -2669,9 +3218,19 @@
           const cur = qs[ui.qIdx];
           if (!cur || progress.answers[cur.id] !== undefined) return;
           const picked = Number(btn.dataset.opt);
+          const isCorrect = picked === cur.ans;
+          const wasMissed = !!progress.missedQs[cur.id];
+          const st = recordItemAttempt('q', cur.id, isCorrect);
           progress.answers[cur.id] = picked;
-          if (picked !== cur.ans) progress.missedQs[cur.id] = true;
-          else delete progress.missedQs[cur.id];
+          if (!ui.quizSessionTouched) ui.quizSessionTouched = {};
+          ui.quizSessionTouched[cur.id] = true;
+          if (!isCorrect) {
+            progress.missedQs[cur.id] = true;
+          } else if (wasMissed && st.streak < 2) {
+            progress.missedQs[cur.id] = true;
+          } else {
+            delete progress.missedQs[cur.id];
+          }
           progress.qMeta[cur.id] = Date.now();
           recordStudyAction(1);
           clearInterval(ui.timerHandle);
