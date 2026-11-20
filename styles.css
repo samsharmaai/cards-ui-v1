@@ -69,7 +69,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 14px 8px;
+  padding: 5px 12px 7px;
   border-bottom: 1px solid var(--border);
   gap: 8px;
 }
@@ -96,9 +96,9 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 10px;
+  padding: 5.5px 10px;
   border-radius: 999px;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 800;
   background: var(--warn-bg);
   border: 1px solid var(--warn);
@@ -182,10 +182,10 @@ html, body {
 .main-area {
   flex: 1;
   min-height: 0;
-  padding: 9px 14px 10px;
+  padding: 8px 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   overflow: hidden;
 }
 
@@ -400,12 +400,12 @@ html, body {
   overscroll-behavior-y: contain;
   background: var(--surface);
   border: 1.5px solid var(--border);
-  border-radius: 22px;
-  padding: 18px 18px;
+  border-radius: 18px;
+  padding: 15px 14px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 13px;
+  gap: 12px;
   cursor: pointer;
   user-select: none;
 }
@@ -436,8 +436,8 @@ html, body {
 .card-tip {
   background: var(--surface-2);
   border-left: 4px solid var(--primary);
-  padding: 13px 15px;
-  border-radius: 13px;
+  padding: 12px 13px;
+  border-radius: 12px;
   font-size: calc(16px + var(--fs-bump));
   line-height: 1.54;
   color: var(--text);
@@ -446,26 +446,37 @@ html, body {
 .thumb-controls {
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: 0.9fr 1.35fr 0.9fr;
-  gap: 9px;
+  grid-template-columns: 0.62fr 1.76fr 0.62fr;
+  gap: 8px;
+}
+
+.thumb-controls .primary-btn,
+.thumb-controls .success-btn,
+.thumb-controls .sec-btn,
+.quiz-controls .primary-btn,
+.quiz-controls .success-btn,
+.quiz-controls .sec-btn {
+  padding: 11px 8px !important;
+  border-radius: 12px;
+  font-size: 15px;
 }
 
 .quiz-controls {
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 9px;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 8px;
 }
 
 /* Trigger Cards */
 .trigger-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 17px;
+  border-radius: 16px;
+  padding: 15px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 11px;
 }
 
 .rule-cue {
@@ -489,15 +500,15 @@ html, body {
 .box-win {
   background: var(--success-bg);
   border: 1px solid var(--success);
-  border-radius: 13px;
-  padding: 13px 14px;
+  border-radius: 12px;
+  padding: 12px 13px;
 }
 
 .box-avoid {
   background: var(--danger-bg);
   border: 1px solid var(--danger);
-  border-radius: 13px;
-  padding: 13px 14px;
+  border-radius: 12px;
+  padding: 12px 13px;
 }
 
 /* Quiz */
@@ -515,23 +526,58 @@ html, body {
   gap: 13px;
 }
 
+/* Un-boxed edge-to-edge reading canvas on mobile */
+.flat-scroll-card {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 2px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .quiz-q {
   font-size: calc(18px + var(--fs-bump));
-  line-height: 1.52;
+  line-height: 1.5;
   font-weight: 650;
 }
 
 .opt-btn {
   width: 100%;
   text-align: left;
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--text);
   border: 1.5px solid var(--border);
   border-radius: 13px;
-  padding: 13px 15px;
-  font-size: calc(16.5px + var(--fs-bump));
-  line-height: 1.5;
+  padding: 11px 12px;
+  font-size: calc(16px + var(--fs-bump));
+  line-height: 1.46;
   cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  transition: opacity 0.16s ease, border-color 0.14s ease, background 0.14s ease;
+}
+
+.opt-keycap {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
 }
 
 .opt-btn.correct {
@@ -540,9 +586,25 @@ html, body {
   font-weight: 600;
 }
 
+.opt-btn.correct .opt-keycap {
+  background: var(--success);
+  border-color: var(--success);
+  color: #ffffff;
+}
+
 .opt-btn.wrong {
   background: var(--danger-bg);
   border-color: var(--danger);
+}
+
+.opt-btn.wrong .opt-keycap {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.opt-btn.dim {
+  opacity: 0.46;
 }
 
 /* Checklist */
@@ -789,11 +851,11 @@ html, body {
 }
 
 .principle-ground-box {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-left: 4px solid var(--primary);
-  padding: 14px 16px;
-  border-radius: 14px;
+  padding: 13px 13px;
+  border-radius: 13px;
 }
 
 .principle-body {
@@ -804,10 +866,10 @@ html, body {
 }
 
 .principle-pillar {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px 16px;
+  border-radius: 13px;
+  padding: 13px 13px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -831,8 +893,8 @@ html, body {
   background: rgba(245, 158, 11, 0.11);
   border: 1px solid rgba(245, 158, 11, 0.45);
   border-left: 4px solid var(--warn);
-  padding: 14px 16px;
-  border-radius: 14px;
+  padding: 13px 13px;
+  border-radius: 13px;
 }
 
 .principle-razor-text {
@@ -1168,6 +1230,130 @@ html, body {
   gap: 5px;
 }
 
+.util-btn {
+  position: relative;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 5.5px 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.util-btn:active {
+  transform: scale(0.96);
+}
+
+.util-sync-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 999px;
+  background: var(--muted);
+  border: 1px solid var(--surface);
+}
+
+.util-sync-dot.ok { background: var(--success); }
+.util-sync-dot.syncing { background: var(--warn); }
+.util-sync-dot.err { background: var(--danger); }
+
+.util-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(0, 0, 0, 0.34);
+}
+
+.util-popover {
+  position: fixed;
+  top: calc(max(6px, env(safe-area-inset-top)) + 44px);
+  right: 12px;
+  width: 232px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  padding: 10px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.46);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.util-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.util-row:active {
+  background: var(--surface-2);
+}
+
+.util-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.util-font-seg {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.util-font-pill {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.util-font-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+  font-weight: 800;
+}
+
+.scroll-fade-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.scroll-fade-bottom {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+}
+
 @media (min-width: 768px) {
   .app-shell {
     max-width: 780px;
@@ -1188,6 +1374,13 @@ html, body {
   .flashcard, .quiz-card {
     padding: 22px 24px;
     gap: 15px;
+  }
+  .flat-scroll-card {
+    padding: 6px 6px 28px;
+    gap: 14px;
+  }
+  .util-popover {
+    right: max(22px, calc(50% - 368px));
   }
   .duel-prompt-card {
     padding: 28px 26px;

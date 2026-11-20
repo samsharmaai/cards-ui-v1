@@ -89,6 +89,7 @@
     showTimeDrawer: false,
     drawerTab: 'radar',
     showSyncDrawer: false,
+    showUtilMenu: false,
     showPasteBox: false,
     syncStatus: 'idle',
     syncMsg: '',
@@ -725,24 +726,17 @@
     } catch (_) {}
   }
 
-  function syncBtnLabel() {
-    if (!syncCfg) return '☁';
-    if (ui.syncStatus === 'syncing') return '☁↻';
-    if (ui.syncStatus === 'err') return '☁!';
-    return '☁✓';
-  }
-
-  function syncBtnStyle() {
-    if (!syncCfg) return 'padding:7px 9px;';
-    if (ui.syncStatus === 'err') return 'padding:7px 9px;border-color:var(--danger);color:var(--danger);';
-    return 'padding:7px 9px;border-color:rgba(16,185,129,0.55);color:var(--success);';
+  function syncDotClass() {
+    if (!syncCfg) return '';
+    if (ui.syncStatus === 'syncing') return 'syncing';
+    if (ui.syncStatus === 'err') return 'err';
+    return 'ok';
   }
 
   function updateSyncHeaderBtn() {
-    const btn = document.getElementById('sync-open-btn');
-    if (!btn) return;
-    btn.textContent = syncBtnLabel();
-    btn.setAttribute('style', syncBtnStyle());
+    const dot = document.getElementById('util-sync-dot');
+    if (!dot) return;
+    dot.className = `util-sync-dot ${syncDotClass()}`;
   }
 
   function scheduleCloudPush() {
@@ -1957,12 +1951,49 @@
     window.location.reload();
   }
 
+  function renderUtilPopover() {
+    if (!ui.showUtilMenu) return '';
+    const isLight = document.body.classList.contains('light');
+    let syncText = 'Ready';
+    let syncColor = 'var(--muted)';
+    if (syncCfg) {
+      if (ui.syncStatus === 'syncing') { syncText = '↻ Syncing…'; syncColor = 'var(--warn)'; }
+      else if (ui.syncStatus === 'err') { syncText = '! Retry'; syncColor = 'var(--danger)'; }
+      else { syncText = '● Synced'; syncColor = 'var(--success)'; }
+    }
+    return `
+      <div class="util-popover-backdrop" id="util-popover-backdrop">
+        <div class="util-popover" role="menu" aria-label="Workspace settings">
+          <div class="util-row" style="cursor:default;">
+            <span style="font-size:13px;font-weight:700;color:var(--muted);">Text Size</span>
+            <div class="util-font-seg">
+              <button class="util-font-pill ${ui.fontScale === 0 ? 'active' : ''}" data-set-font="0">A</button>
+              <button class="util-font-pill ${ui.fontScale === 1 ? 'active' : ''}" data-set-font="1">A+</button>
+              <button class="util-font-pill ${ui.fontScale === 2 ? 'active' : ''}" data-set-font="2">A++</button>
+            </div>
+          </div>
+          <div class="util-divider"></div>
+          <button class="util-row" id="util-sync-btn">
+            <span>☁ Cloud Sync</span>
+            <span style="font-size:12px;font-weight:700;color:${syncColor};">${syncText}</span>
+          </button>
+          <button class="util-row" id="util-theme-btn">
+            <span>◐ Appearance</span>
+            <span style="font-size:12px;font-weight:700;color:var(--muted);">${isLight ? 'Light' : 'Dark'}</span>
+          </button>
+          <button class="util-row" id="util-lock-btn">
+            <span>🔒 Lock Workspace</span>
+            <span style="font-size:12px;color:var(--muted);">→</span>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderApp() {
     if (!DATA) return renderLock();
     saveUiState();
     const root = document.getElementById('root');
-    const totalCards = DATA.decks.reduce((s, d) => s + d.cards.length, 0);
-    const totalDoneCards = DATA.decks.reduce((s, d) => s + deckDoneCount(d), 0);
     const stats = computeStreakStats();
 
     let mainHtml = '';
@@ -1974,21 +2005,18 @@
     root.innerHTML = `
       <div class="app-shell">
         <header class="topbar">
-          <div style="display:flex;align-items:center;gap:9px;min-width:0;">
-            <img src="icon-192.png?v=10" alt="" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);flex-shrink:0;" />
-            <div style="min-width:0;">
-              <div class="brand-title">${DATA.appTitle}</div>
-              <div class="brand-sub">${totalDoneCards}/${totalCards} cards mastered</div>
-            </div>
+          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+            <img src="icon-192.png?v=10" alt="" style="width:26px;height:26px;border-radius:7px;border:1px solid var(--border);flex-shrink:0;" />
+            <div class="brand-title">${DATA.appTitle}</div>
           </div>
-          <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
-            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Tap for daily log">
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Progress & Weakness Radar">
               <span id="streak-count-label">🔥 ${stats.streak}d</span>
             </button>
-            <button class="icon-btn" id="sync-open-btn" title="Cross-device sync" style="${syncBtnStyle()}">${syncBtnLabel()}</button>
-            <button class="icon-btn" id="font-btn" title="Text size (tap to cycle A / A+ / A++)" style="padding:7px 9px;font-weight:800;font-size:13px;">${fontBtnLabel()}</button>
-            <button class="icon-btn" id="theme-btn" aria-label="Toggle theme" style="padding:7px 9px;">◐</button>
-            <button class="icon-btn" id="lock-btn" aria-label="Lock" style="padding:7px 9px;">🔒</button>
+            <button class="util-btn" id="util-menu-btn" aria-label="Settings and Sync" title="Text size, sync, theme & lock">
+              ⚙
+              <span id="util-sync-dot" class="util-sync-dot ${syncDotClass()}"></span>
+            </button>
           </div>
         </header>
 
@@ -2020,6 +2048,7 @@
         ${renderTimeDrawer(stats)}
         ${renderSyncDrawer()}
         ${renderPickerDrawer()}
+        ${renderUtilPopover()}
       </div>
     `;
 
@@ -2079,8 +2108,8 @@
     }).join('');
 
     const centerBtnHtml = ui.flipped
-      ? `<button class="success-btn" id="card-got-it" style="padding:14px 10px;">${isCardDone ? '✓ Done • Next →' : '✓ Got It • Next'}</button>`
-      : `<button class="primary-btn" id="card-flip" style="padding:14px 10px;">Reveal Answer</button>`;
+      ? `<button class="success-btn" id="card-got-it">${isCardDone ? '✓ Done • Next →' : '✓ Got It • Next'}</button>`
+      : `<button class="primary-btn" id="card-flip">Reveal Answer</button>`;
 
     return `
       ${selectorBarHtml}
@@ -2109,9 +2138,9 @@
       </div>
 
       <div class="thumb-controls">
-        <button class="sec-btn" id="card-prev" style="padding:14px 10px;" ${ui.cardIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="sec-btn" id="card-prev" aria-label="Previous card" ${ui.cardIdx === 0 ? 'disabled' : ''}>←</button>
         ${centerBtnHtml}
-        <button class="sec-btn" id="card-next" style="padding:14px 10px;" ${ui.cardIdx === cards.length - 1 ? 'disabled' : ''}>Skip →</button>
+        <button class="sec-btn" id="card-next" aria-label="Next card" ${ui.cardIdx === cards.length - 1 ? 'disabled' : ''}>→</button>
       </div>
     `;
   }
@@ -2255,7 +2284,7 @@
 
     const feedbackHtml = answered
       ? `
-        <div class="duel-feedback" style="border-color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">
+        <div class="duel-feedback" id="duel-feedback-box" style="cursor:pointer;border-color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">
           <strong style="color:${picked === d.ans ? 'var(--success)' : 'var(--warn)'};">${picked === d.ans ? '✓ Spot on:' : '💡 Quick rule:'}</strong>
           <span style="margin-left:4px;">${fmtText(d.why)}</span>
           ${masteryNoteHtml}
@@ -2263,14 +2292,14 @@
       `
       : '';
 
-    let centerActionHtml = `<button class="sec-btn" disabled style="padding:14px 10px;opacity:0.7;">Tap A or B above</button>`;
+    let centerActionHtml = `<button class="sec-btn" disabled style="opacity:0.7;">Tap A or B above</button>`;
     if (answered) {
       if (ui.duelFilter === 'ROUND10' && ui.duelIdx === list.length - 1) {
-        centerActionHtml = `<button class="success-btn" id="duel-finish-round" style="padding:14px 10px;">🎉 Finish Round →</button>`;
+        centerActionHtml = `<button class="success-btn" id="duel-finish-round">🎉 Finish Round →</button>`;
       } else if (ui.duelIdx < list.length - 1) {
-        centerActionHtml = `<button class="primary-btn" id="duel-next-main" style="padding:14px 10px;">Next Duel →</button>`;
+        centerActionHtml = `<button class="primary-btn" id="duel-next-main">Next Duel →</button>`;
       } else {
-        centerActionHtml = `<button class="success-btn" id="duel-new-round-btn" style="padding:14px 10px;">☕ Next Round →</button>`;
+        centerActionHtml = `<button class="success-btn" id="duel-new-round-btn">☕ Next Round →</button>`;
       }
     }
 
@@ -2282,9 +2311,10 @@
       <div class="card-dots">${dotsHtml}</div>
 
       <div class="duel-stage">
-        <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}">
+        <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}" id="duel-prompt-box" style="${answered ? 'cursor:pointer;' : ''}">
           <span class="badge" style="${isMastered ? 'color:var(--success);' : (isTricky ? 'color:var(--warn);' : '')}">${isMastered ? '✓ ' : ''}${d.sec}${topicPart} • ${ui.duelIdx + 1}/${list.length}${retryTag}</span>
           <div class="duel-prompt-text">${fmtText(d.prompt)}</div>
+          ${answered ? `<div style="font-size:12.5px;font-weight:700;color:var(--primary);margin-top:2px;">👆 Tap card for next duel</div>` : ''}
         </div>
 
         <div style="display:flex;flex-direction:column;gap:10px;">
@@ -2310,9 +2340,9 @@
       </div>
 
       <div class="thumb-controls">
-        <button class="sec-btn" id="duel-prev" style="padding:14px 10px;" ${ui.duelIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="sec-btn" id="duel-prev" aria-label="Previous duel" ${ui.duelIdx === 0 ? 'disabled' : ''}>←</button>
         ${centerActionHtml}
-        <button class="sec-btn" id="duel-next" style="padding:14px 10px;" ${ui.duelIdx === list.length - 1 ? 'disabled' : ''}>Skip →</button>
+        <button class="sec-btn" id="duel-next" aria-label="Skip duel" ${ui.duelIdx === list.length - 1 ? 'disabled' : ''}>→</button>
       </div>
     `;
   }
@@ -2378,9 +2408,12 @@
           <span class="dropdown-caret">▾</span>
         </button>
       </div>
-      <div class="scroll-pane">
-        ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
-        ${footerActionHtml}
+      <div class="scroll-fade-wrap">
+        <div class="scroll-pane" style="padding-bottom:26px;">
+          ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
+          ${footerActionHtml}
+        </div>
+        <div class="scroll-fade-bottom"></div>
       </div>
     `;
   }
@@ -2440,14 +2473,21 @@
            <div style="height:100%;width:${Math.round((answeredList.length / qs.length) * 100)}%;background:var(--success);transition:width .2s;"></div>
          </div>`;
 
+    const optLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
     const optsHtml = q.opts.map((opt, idx) => {
       let cls = 'opt-btn';
-      let prefix = '';
+      let cap = optLetters[idx] || String(idx + 1);
       if (chosen !== undefined) {
-        if (idx === q.ans) { cls += ' correct'; prefix = '✅ '; }
-        else if (idx === chosen) { cls += ' wrong'; prefix = '❌ '; }
+        if (idx === q.ans) { cls += ' correct'; cap = '✓'; }
+        else if (idx === chosen) { cls += ' wrong'; cap = '✕'; }
+        else { cls += ' dim'; }
       }
-      return `<button class="${cls}" data-opt="${idx}">${prefix}${fmtText(opt)}</button>`;
+      return `
+        <button class="${cls}" data-opt="${idx}">
+          <span class="opt-keycap">${cap}</span>
+          <span style="min-width:0;flex:1;">${fmtText(opt)}</span>
+        </button>
+      `;
     }).join('');
 
     let qMasteryNoteHtml = '';
@@ -2462,8 +2502,8 @@
     }
 
     const rightControlBtn = (ui.qIdx === qs.length - 1 && setComplete && nextQuizSec)
-      ? `<button class="success-btn" id="next-qsec-btn" style="padding:14px 12px;">✓ Done • ${nextQuizSec} →</button>`
-      : `<button class="primary-btn" id="q-next" style="padding:14px 12px;" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>`;
+      ? `<button class="success-btn" id="next-qsec-btn">✓ Done • ${nextQuizSec} →</button>`
+      : `<button class="primary-btn" id="q-next" ${ui.qIdx === qs.length - 1 ? 'disabled' : ''}>Next →</button>`;
 
     const qTopicPart = q.topic ? ` • ${fmtText(q.topic)}` : '';
     const qRetryBadge = isActiveMissed ? ` • 🔁 Retry (${qStat.streak}/2)` : '';
@@ -2482,27 +2522,30 @@
 
       ${qProgressHtml}
 
-      <div class="quiz-card" id="quiz-card-box" style="${setComplete ? 'border-color:rgba(16,185,129,0.45);' : ''}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
-        </div>
-        <div class="quiz-q">${fmtText(q.q)}</div>
-        <div style="display:flex;flex-direction:column;gap:9px;">
-          ${optsHtml}
-        </div>
-        ${chosen !== undefined ? `
-          <div class="card-tip">
-            <strong>Why:</strong> ${fmtText(q.exp)}
-            ${qMasteryNoteHtml}
-            <div style="margin-top:10px;">
-              <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
-            </div>
+      <div class="scroll-fade-wrap">
+        <div class="flat-scroll-card" id="quiz-card-box">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
           </div>
-        ` : ''}
+          <div class="quiz-q">${fmtText(q.q)}</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${optsHtml}
+          </div>
+          ${chosen !== undefined ? `
+            <div class="card-tip">
+              <strong>Why:</strong> ${fmtText(q.exp)}
+              ${qMasteryNoteHtml}
+              <div style="margin-top:10px;">
+                <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        <div class="scroll-fade-bottom"></div>
       </div>
 
       <div class="quiz-controls">
-        <button class="sec-btn" id="q-prev" style="padding:14px 12px;" ${ui.qIdx === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="sec-btn" id="q-prev" ${ui.qIdx === 0 ? 'disabled' : ''}>← Prev</button>
         ${rightControlBtn}
       </div>
     `;
@@ -2603,23 +2646,22 @@
     let bottomBarHtml = '';
     if (isStepView) {
       const prevDisabled = ui.pIdx === 0 && ui.pStep === 0;
-      const prevLabel = ui.pStep > 0 ? '← Block' : '← Prev';
       const centerStepBtn = ui.pStep < 3
-        ? `<button class="primary-btn" id="p-next-step" style="padding:14px 10px;">Next Block (${ui.pStep + 2}/4) →</button>`
-        : `<button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>`;
+        ? `<button class="primary-btn" id="p-next-step">Next Block (${ui.pStep + 2}/4) →</button>`
+        : `<button class="success-btn" id="p-got-it">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>`;
       bottomBarHtml = `
         <div class="thumb-controls">
-          <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${prevDisabled ? 'disabled' : ''}>${prevLabel}</button>
+          <button class="sec-btn" id="p-prev" aria-label="Previous block" ${prevDisabled ? 'disabled' : ''}>←</button>
           ${centerStepBtn}
-          <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Mod →</button>
+          <button class="sec-btn" id="p-next" aria-label="Next module" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>→</button>
         </div>
       `;
     } else {
       bottomBarHtml = `
         <div class="thumb-controls">
-          <button class="sec-btn" id="p-prev" style="padding:14px 10px;" ${ui.pIdx === 0 ? 'disabled' : ''}>← Prev</button>
-          <button class="success-btn" id="p-got-it" style="padding:14px 10px;">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>
-          <button class="sec-btn" id="p-next" style="padding:14px 10px;" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>Next →</button>
+          <button class="sec-btn" id="p-prev" aria-label="Previous module" ${ui.pIdx === 0 ? 'disabled' : ''}>←</button>
+          <button class="success-btn" id="p-got-it">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>
+          <button class="sec-btn" id="p-next" aria-label="Next module" ${ui.pIdx === list.length - 1 ? 'disabled' : ''}>→</button>
         </div>
       `;
     }
@@ -2635,23 +2677,26 @@
 
       <div class="card-dots">${pDotsHtml}</div>
 
-      <div class="quiz-card" id="principle-card-box" style="${isDone ? 'border-color:rgba(16,185,129,0.55);' : ''}">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-            ${viewSwitchHtml}
-            ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
-            <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
+      <div class="scroll-fade-wrap">
+        <div class="flat-scroll-card" id="principle-card-box">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${viewSwitchHtml}
+              ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
+              <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
+            </div>
           </div>
-        </div>
 
-        <div>
-          <div class="principle-title">${fmtText(p.title)}</div>
-          <div class="principle-sub">${fmtText(p.subtitle)}</div>
-        </div>
+          <div>
+            <div class="principle-title">${fmtText(p.title)}</div>
+            <div class="principle-sub">${fmtText(p.subtitle)}</div>
+          </div>
 
-        ${stepPillsHtml}
-        ${contentBodyHtml}
+          ${stepPillsHtml}
+          ${contentBodyHtml}
+        </div>
+        <div class="scroll-fade-bottom"></div>
       </div>
 
       ${bottomBarHtml}
@@ -2680,14 +2725,58 @@
   }
 
   function bindEvents() {
-    document.getElementById('theme-btn')?.addEventListener('click', toggleTheme);
-    document.getElementById('font-btn')?.addEventListener('click', cycleFontScale);
-    document.getElementById('lock-btn')?.addEventListener('click', lockNow);
+    document.getElementById('util-menu-btn')?.addEventListener('click', () => {
+      ui.showUtilMenu = !ui.showUtilMenu;
+      ui.showTimeDrawer = false;
+      ui.showSyncDrawer = false;
+      ui.picker = null;
+      renderApp();
+    });
+
+    document.getElementById('util-popover-backdrop')?.addEventListener('click', e => {
+      if (e.target.id === 'util-popover-backdrop') {
+        ui.showUtilMenu = false;
+        renderApp();
+      }
+    });
+
+    document.querySelectorAll('[data-set-font]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const nextScale = Number(btn.dataset.setFont);
+        if (nextScale === 0 || nextScale === 1 || nextScale === 2) {
+          ui.fontScale = nextScale;
+          try { localStorage.setItem(LS_FONT, String(ui.fontScale)); } catch (_) {}
+          applyFontScale(ui.fontScale);
+          renderApp();
+        }
+      });
+    });
+
+    document.getElementById('util-sync-btn')?.addEventListener('click', () => {
+      saveProgress(false);
+      ui.showUtilMenu = false;
+      ui.picker = null;
+      ui.showTimeDrawer = false;
+      ui.syncMsg = '';
+      ui.showSyncDrawer = true;
+      renderApp();
+    });
+
+    document.getElementById('util-theme-btn')?.addEventListener('click', () => {
+      toggleTheme();
+      renderApp();
+    });
+
+    document.getElementById('util-lock-btn')?.addEventListener('click', () => {
+      ui.showUtilMenu = false;
+      lockNow();
+    });
 
     const openDrawer = () => {
       saveProgress(false);
       ui.picker = null;
       ui.showSyncDrawer = false;
+      ui.showUtilMenu = false;
       ui.showTimeDrawer = true;
       renderApp();
     };
@@ -3167,6 +3256,25 @@
         document.getElementById('duel-next')?.addEventListener('click', stepNextDuel);
         document.getElementById('duel-next-main')?.addEventListener('click', stepNextDuel);
 
+        const advanceAnsweredDuel = () => {
+          const list = getActiveDuels();
+          const cur = list[ui.duelIdx];
+          if (!cur || ui.duelSessionPicks[cur.id] === undefined) return;
+          if (ui.duelFilter === 'ROUND10' && ui.duelIdx === list.length - 1) {
+            ui.duelRoundDone = true;
+            renderApp();
+          } else if (ui.duelIdx < list.length - 1) {
+            ui.duelIdx++;
+            renderApp();
+          } else {
+            ui.duelFilter = 'ROUND10';
+            dealChillRound(false);
+            renderApp();
+          }
+        };
+        document.getElementById('duel-prompt-box')?.addEventListener('click', advanceAnsweredDuel);
+        document.getElementById('duel-feedback-box')?.addEventListener('click', advanceAnsweredDuel);
+
         document.getElementById('duel-finish-round')?.addEventListener('click', () => {
           ui.duelRoundDone = true;
           renderApp();
@@ -3458,6 +3566,7 @@
       !swReloading &&
       !ui.showTimeDrawer &&
       !ui.showSyncDrawer &&
+      !ui.showUtilMenu &&
       !ui.picker &&
       e.touches.length === 1 &&
       e.target.tagName !== 'INPUT' &&
@@ -3465,7 +3574,7 @@
       e.touches[0].clientY < window.innerHeight * 0.55
     ) {
       const scroller = e.target.closest
-        ? e.target.closest('.scroll-pane, .duel-stage, .flashcard, .quiz-card, .lock-wrap')
+        ? e.target.closest('.scroll-pane, .flat-scroll-card, .duel-stage, .flashcard, .quiz-card, .lock-wrap')
         : null;
       if (!scroller || scroller.scrollTop <= 2) {
         ptrPossible = true;
@@ -3538,7 +3647,7 @@
       resetPtrIndicator();
     }
 
-    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.picker) return;
+    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.showUtilMenu || ui.picker) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     const dx = e.changedTouches[0].screenX - sx;
     const dy = e.changedTouches[0].screenY - sy;
@@ -3589,7 +3698,7 @@
   }, { passive: true });
 
   document.addEventListener('keydown', e => {
-    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.picker) return;
+    if (!DATA || ui.showTimeDrawer || ui.showSyncDrawer || ui.showUtilMenu || ui.picker) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
