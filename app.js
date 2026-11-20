@@ -2408,12 +2408,9 @@
           <span class="dropdown-caret">▾</span>
         </button>
       </div>
-      <div class="scroll-fade-wrap">
-        <div class="scroll-pane" style="padding-bottom:26px;">
-          ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
-          ${footerActionHtml}
-        </div>
-        <div class="scroll-fade-bottom"></div>
+      <div class="scroll-pane">
+        ${items || '<div style="text-align:center;color:var(--muted);padding:32px 0;">No matching rules.</div>'}
+        ${footerActionHtml}
       </div>
     `;
   }
@@ -2522,26 +2519,23 @@
 
       ${qProgressHtml}
 
-      <div class="scroll-fade-wrap">
-        <div class="flat-scroll-card" id="quiz-card-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
-          </div>
-          <div class="quiz-q">${fmtText(q.q)}</div>
-          <div style="display:flex;flex-direction:column;gap:8px;">
-            ${optsHtml}
-          </div>
-          ${chosen !== undefined ? `
-            <div class="card-tip">
-              <strong>Why:</strong> ${fmtText(q.exp)}
-              ${qMasteryNoteHtml}
-              <div style="margin-top:10px;">
-                <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
-              </div>
-            </div>
-          ` : ''}
+      <div class="flat-scroll-card" id="quiz-card-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
         </div>
-        <div class="scroll-fade-bottom"></div>
+        <div class="quiz-q">${fmtText(q.q)}</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${optsHtml}
+        </div>
+        ${chosen !== undefined ? `
+          <div class="card-tip">
+            <strong>Why:</strong> ${fmtText(q.exp)}
+            ${qMasteryNoteHtml}
+            <div style="margin-top:10px;">
+              <button class="icon-btn" id="retry-q" style="font-size:13px;padding:6px 10px;">Reset Question</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
 
       <div class="quiz-controls">
@@ -2677,26 +2671,23 @@
 
       <div class="card-dots">${pDotsHtml}</div>
 
-      <div class="scroll-fade-wrap">
-        <div class="flat-scroll-card" id="principle-card-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              ${viewSwitchHtml}
-              ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
-              <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
-            </div>
+      <div class="flat-scroll-card" id="principle-card-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge" style="${isDone ? 'color:var(--success);' : ''}">${isDone ? '✓ ' : ''}Module ${p.num} • ${p.sec}</span>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            ${viewSwitchHtml}
+            ${dIdx >= 0 ? `<button class="icon-btn" data-jump-deck="${dIdx}" style="padding:5px 9px;font-size:12.5px;">🗂 Deck →</button>` : ''}
+            <button class="icon-btn" data-jump-qsec="${p.sec}" style="padding:5px 9px;font-size:12.5px;">🎯 Practice →</button>
           </div>
-
-          <div>
-            <div class="principle-title">${fmtText(p.title)}</div>
-            <div class="principle-sub">${fmtText(p.subtitle)}</div>
-          </div>
-
-          ${stepPillsHtml}
-          ${contentBodyHtml}
         </div>
-        <div class="scroll-fade-bottom"></div>
+
+        <div>
+          <div class="principle-title">${fmtText(p.title)}</div>
+          <div class="principle-sub">${fmtText(p.subtitle)}</div>
+        </div>
+
+        ${stepPillsHtml}
+        ${contentBodyHtml}
       </div>
 
       ${bottomBarHtml}

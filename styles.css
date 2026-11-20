@@ -13,6 +13,7 @@
   --danger-bg: rgba(239, 68, 68, 0.14);
   --warn: #f59e0b;
   --warn-bg: rgba(245, 158, 11, 0.16);
+  --dock-shadow: 0 -6px 14px rgba(0, 0, 0, 0.24);
   --fs-bump: 2px;
 }
 
@@ -35,6 +36,7 @@ body.light {
   --danger-bg: rgba(220, 38, 38, 0.10);
   --warn: #d97706;
   --warn-bg: rgba(217, 119, 6, 0.13);
+  --dock-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
 }
 
 * {
@@ -448,6 +450,13 @@ html, body {
   display: grid;
   grid-template-columns: 0.62fr 1.76fr 0.62fr;
   gap: 8px;
+  position: relative;
+  z-index: 2;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--dock-shadow);
+  margin: 0 -10px;
+  padding: 8px 10px 0;
 }
 
 .thumb-controls .primary-btn,
@@ -466,6 +475,13 @@ html, body {
   display: grid;
   grid-template-columns: 0.85fr 1.15fr;
   gap: 8px;
+  position: relative;
+  z-index: 2;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--dock-shadow);
+  margin: 0 -10px;
+  padding: 8px 10px 0;
 }
 
 /* Trigger Cards */
@@ -535,7 +551,7 @@ html, body {
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 4px 2px 26px;
+  padding: 4px 2px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1336,24 +1352,6 @@ html, body {
   font-weight: 800;
 }
 
-.scroll-fade-wrap {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.scroll-fade-bottom {
-  pointer-events: none;
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 26px;
-  background: linear-gradient(to bottom, transparent, var(--bg));
-}
-
 @media (min-width: 768px) {
   .app-shell {
     max-width: 780px;
@@ -1371,12 +1369,17 @@ html, body {
     padding: 12px 22px 14px;
     gap: 10px;
   }
+  .thumb-controls,
+  .quiz-controls {
+    margin: 0 -22px;
+    padding: 10px 22px 0;
+  }
   .flashcard, .quiz-card {
     padding: 22px 24px;
     gap: 15px;
   }
   .flat-scroll-card {
-    padding: 6px 6px 28px;
+    padding: 6px 6px 14px;
     gap: 14px;
   }
   .util-popover {
