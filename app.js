@@ -1429,21 +1429,21 @@
       const focusCardHtml = top
         ? `
           <div class="diag-focus-card">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span style="font-size:11.5px;font-weight:800;color:var(--primary);letter-spacing:0.04em;">HILL-CLIMB #1 FOCUS</span>
-              <span style="font-size:12px;font-weight:700;color:var(--muted);">
-                ${diag.overallQuizAcc !== null ? `Quiz ${diag.overallQuizAcc}%` : 'Ready'} • ${diag.totalActiveQueue} in retry queue
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:calc(12.5px + var(--fs-bump) * 0.3);font-weight:800;color:var(--primary);letter-spacing:0.04em;">NEXT FOCUS</span>
+              <span style="font-size:calc(13.5px + var(--fs-bump) * 0.35);font-weight:700;color:var(--muted);">
+                ${diag.overallQuizAcc !== null ? `Quiz ${diag.overallQuizAcc}%` : 'Ready'}${diag.totalActiveQueue > 0 ? ` • ${diag.totalActiveQueue} to retry` : ''}
               </span>
             </div>
             <div>
-              <div style="font-size:15.5px;font-weight:800;">${top.sec} • ${fmtText(top.label)}</div>
-              <div style="font-size:12.5px;color:var(--muted);margin-top:2px;">
-                Quiz ${top.qRight}/${top.qTried} (${top.qTotal - top.qTried} unseen) • Duels ${top.dDone}/${top.dTotal}${top.qActiveMissed + top.dTricky > 0 ? ` • ${top.qActiveMissed + top.dTricky} to lock in` : ''}
+              <div style="font-size:calc(17px + var(--fs-bump) * 0.5);font-weight:800;line-height:1.3;">${top.sec} • ${fmtText(top.label)}</div>
+              <div style="font-size:calc(14px + var(--fs-bump) * 0.4);color:var(--muted);margin-top:4px;line-height:1.4;">
+                Quiz ${top.qRight}/${top.qTried} • Duels ${top.dDone}/${top.dTotal}${top.qActiveMissed + top.dTricky > 0 ? ` • <strong style="color:var(--warn);">${top.qActiveMissed + top.dTricky} to lock in</strong>` : ''}
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-              <button class="primary-btn" id="diag-drill-weakest-btn" style="padding:10px 8px;font-size:13.5px;">🎯 Drill Weakest</button>
-              <button class="sec-btn" id="diag-smart-duel-btn" style="padding:10px 8px;font-size:13.5px;">⚔️ Smart Duel</button>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+              <button class="primary-btn" id="diag-drill-weakest-btn" style="padding:12px 10px;font-size:calc(14.5px + var(--fs-bump) * 0.35);border-radius:12px;">🎯 Drill Weakest</button>
+              <button class="sec-btn" id="diag-smart-duel-btn" style="padding:12px 10px;font-size:calc(14.5px + var(--fs-bump) * 0.35);border-radius:12px;">⚔️ Smart Duel</button>
             </div>
           </div>
         `
@@ -1452,21 +1452,22 @@
       const secRowsHtml = diag.sortedByPriority.map(r => {
         const barPct = r.effAcc !== null ? Math.max(8, r.effAcc) : Math.max(8, Math.round(((r.qTried + r.dDone) / Math.max(1, r.qTotal + r.dTotal)) * 100));
         const accLabel = r.effAcc !== null ? `${r.effAcc}%` : 'New';
-        const missNote = (r.qActiveMissed + r.dTricky) > 0
-          ? ` • <span style="color:var(--warn);font-weight:700;">${r.qActiveMissed + r.dTricky} retry</span>`
+        const retryTotal = r.qActiveMissed + r.dTricky;
+        const missNote = retryTotal > 0
+          ? ` • <span style="color:var(--warn);font-weight:700;">${retryTotal} to retry</span>`
           : '';
         return `
           <button class="diag-sec-row" data-diag-sec="${r.sec}">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span style="font-size:13.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.sec} • ${fmtText(r.label)}</span>
-              <span class="diag-pill ${r.status}">${statusLabel(r.status)} • ${accLabel}</span>
+              <span style="font-size:calc(15px + var(--fs-bump) * 0.45);font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.sec} • ${fmtText(r.label)}</span>
+              <span class="diag-pill ${r.status}">${statusLabel(r.status)} ${accLabel}</span>
             </div>
             <div class="diag-bar-track">
               <div class="diag-bar-fill" style="width:${barPct}%;background:${barColor(r.status)};"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);gap:6px;">
-              <span>Practice ${r.qRight}/${r.qTried} (${r.qTotal} total) • Duel ${r.dDone}/${r.dTotal}${missNote}</span>
-              <span style="white-space:nowrap;">${r.weight}% wt →</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:calc(13.5px + var(--fs-bump) * 0.35);color:var(--muted);gap:8px;">
+              <span>Quiz ${r.qRight}/${r.qTried} • Duels ${r.dDone}/${r.dTotal}${missNote}</span>
+              <span style="font-weight:700;color:var(--primary);white-space:nowrap;">Practice →</span>
             </div>
           </button>
         `;
@@ -1474,9 +1475,7 @@
 
       const topicsHtml = diag.weakTopics.length
         ? `
-          <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.03em;margin-top:2px;">
-            FRICTION SUB-TOPICS
-          </div>
+          <div class="drawer-section-label" style="margin-top:4px;">FRICTION SUB-TOPICS</div>
           <div class="diag-topic-wrap">
             ${diag.weakTopics.map(t => `
               <span class="diag-topic-chip">
@@ -1486,13 +1485,11 @@
             `).join('')}
           </div>
         `
-        : `<div style="font-size:12.5px;color:var(--muted);">No friction topics yet — missed picks and questions are tracked here automatically.</div>`;
+        : `<div style="font-size:calc(14px + var(--fs-bump) * 0.35);color:var(--muted);">No friction topics yet — missed picks and questions are tracked here automatically.</div>`;
 
       bodyHtml = `
         ${focusCardHtml}
-        <div style="font-size:12px;font-weight:800;color:var(--muted);letter-spacing:0.03em;">
-          BY SECTION (WEAKEST FIRST — TAP TO PRACTICE)
-        </div>
+        <div class="drawer-section-label">SECTIONS (WEAKEST FIRST)</div>
         <div class="day-log-list">
           ${secRowsHtml}
           ${topicsHtml}
@@ -1504,15 +1501,6 @@
       const yest = new Date(today);
       yest.setDate(yest.getDate() - 1);
       const yestKey = localDateKey(yest);
-
-      const weekHtml = stats.week.map(w => `
-        <div class="day-dot">
-          <span>${w.label}</span>
-          <div class="day-circle ${w.lit ? 'lit' : ''} ${w.isToday ? 'today-ring' : ''}">
-            ${w.lit ? '✓' : ''}
-          </div>
-        </div>
-      `).join('');
 
       const dateSet = new Set();
       for (let i = 0; i < 7; i++) {
@@ -1534,10 +1522,10 @@
         return `
           <div class="day-log-row">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span style="font-size:14px;font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--text)' : 'var(--muted)'};">
+              <span style="font-size:calc(15px + var(--fs-bump) * 0.45);font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--text)' : 'var(--muted)'};">
                 ${formatDateHeading(dk, todayKey, yestKey)}
               </span>
-              <span style="font-size:13.5px;font-weight:700;">
+              <span style="font-size:calc(14.5px + var(--fs-bump) * 0.4);font-weight:700;">
                 <span ${isToday ? 'id="today-row-time"' : ''}>${formatCalmMinutes(secs)}</span><span style="color:var(--muted);font-weight:600;">${repsTag}</span>
               </span>
             </div>
@@ -1549,17 +1537,22 @@
       }).join('');
 
       bodyHtml = `
-        <div class="drawer-week-box">
-          <div class="week-dots">${weekHtml}</div>
+        <div class="drawer-stat-grid">
+          <div class="drawer-stat-box">
+            <span class="drawer-stat-label">TODAY</span>
+            <span class="drawer-stat-val" id="drawer-today-time" style="color:var(--primary);">${formatCalmMinutes(stats.todaySecs)}</span>
+          </div>
+          <div class="drawer-stat-box">
+            <span class="drawer-stat-label">STREAK</span>
+            <span class="drawer-stat-val" style="color:var(--warn);">🔥 ${stats.streak}d</span>
+          </div>
+          <div class="drawer-stat-box">
+            <span class="drawer-stat-label">TOTAL</span>
+            <span class="drawer-stat-val" id="drawer-total-time">${formatCalmMinutes(stats.totalSecs)}</span>
+          </div>
         </div>
 
-        <div style="font-size:12.5px;color:var(--muted);">
-          Quietly logged in the background while you study.
-        </div>
-
-        <div style="font-size:13px;font-weight:800;color:var(--muted);margin-top:2px;">
-          BY DAY
-        </div>
+        <div class="drawer-section-label">DAILY HISTORY</div>
 
         <div class="day-log-list">
           ${dayRowsHtml}
@@ -1570,29 +1563,15 @@
     return `
       <div class="drawer-backdrop" id="time-drawer-backdrop">
         <div class="drawer-sheet" role="dialog" aria-label="Progress and Diagnostics">
+          <div class="drawer-handle"></div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <div style="font-size:18px;font-weight:800;">🔥 Progress & Radar</div>
-            <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 11px;font-size:14px;">✕</button>
-          </div>
-
-          <div class="drawer-stat-grid">
-            <div class="drawer-stat-box">
-              <span class="drawer-stat-label">TODAY</span>
-              <span class="drawer-stat-val" id="drawer-today-time" style="color:var(--primary);">${formatCalmMinutes(stats.todaySecs)}</span>
-            </div>
-            <div class="drawer-stat-box">
-              <span class="drawer-stat-label">STREAK</span>
-              <span class="drawer-stat-val" style="color:var(--warn);">🔥 ${stats.streak}d</span>
-            </div>
-            <div class="drawer-stat-box">
-              <span class="drawer-stat-label">TOTAL</span>
-              <span class="drawer-stat-val" id="drawer-total-time">${formatCalmMinutes(stats.totalSecs)}</span>
-            </div>
+            <div style="font-size:calc(19px + var(--fs-bump) * 0.4);font-weight:800;">🔥 Progress & Radar</div>
+            <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 12px;font-size:15px;">✕</button>
           </div>
 
           <div class="drawer-seg" role="tablist">
-            <button class="drawer-seg-btn ${isRadar ? 'active' : ''}" data-drawer-tab="radar">🎯 Weakness Radar</button>
-            <button class="drawer-seg-btn ${!isRadar ? 'active' : ''}" data-drawer-tab="log">🔥 Daily Log</button>
+            <button class="drawer-seg-btn ${isRadar ? 'active' : ''}" data-drawer-tab="radar">🎯 Radar</button>
+            <button class="drawer-seg-btn ${!isRadar ? 'active' : ''}" data-drawer-tab="log">🔥 Study Log</button>
           </div>
 
           ${bodyHtml}
