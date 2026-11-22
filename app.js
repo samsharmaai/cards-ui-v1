@@ -1762,7 +1762,7 @@
           <button class="picker-item ${active ? 'active' : ''} ${done && !active ? 'done-item' : ''}" data-pick-principle="${idx}">
             <div style="min-width:0;">
               <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${prefix}${p.num}. ${p.title}</div>
-              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${p.sec}</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.35;">${p.guideScope || p.sec}</div>
             </div>
             <span style="font-size:13px;font-weight:700;color:${done ? 'var(--success)' : 'var(--muted)'};white-space:nowrap;">${done ? '✓' : '○'}</span>
           </button>
@@ -2630,6 +2630,7 @@
     const pillarsInner = (p.pillars || []).map(pil => `
       <div class="principle-pillar">
         <div class="principle-pillar-title">${fmtText(pil.label)}</div>
+        ${pil.viz ? pil.viz : ''}
         <div class="principle-pillar-desc">${fmtText(pil.desc)}</div>
       </div>
     `).join('');
@@ -2739,6 +2740,7 @@
         <div>
           <div class="principle-title">${fmtText(p.title)}</div>
           <div class="principle-sub">${fmtText(p.subtitle)}</div>
+          ${p.guideScope ? `<div class="principle-scope">${fmtText(p.guideScope)}</div>` : ''}
         </div>
 
         ${stepPillsHtml}
