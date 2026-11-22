@@ -2527,7 +2527,7 @@
   }
 
   function principleMaxStep(p) {
-    return (p && p.visual && p.visual.svg) ? 4 : 3;
+    return (p && p.visual && (p.visual.html || p.visual.svg)) ? 4 : 3;
   }
 
   function computeCutoffSim(t) {
@@ -2535,7 +2535,7 @@
     const metricB = Math.round(Math.max(12, Math.min(94, 8 + t * 96)));
     const countA = Math.round((100 - metricA) * 0.4);
     const countB = Math.round((100 - metricB) * 1.4);
-    const cutX = Math.round(24 + ((t - 0.15) / 0.70) * 292);
+    const cutX = Math.round(16 + ((t - 0.15) / 0.70) * 248);
     return { metricA, metricB, countA, countB, cutX };
   }
 
@@ -2545,7 +2545,7 @@
     if (ui.pIdx >= list.length) ui.pIdx = 0;
 
     const p = list[ui.pIdx];
-    const hasVisual = !!(p.visual && p.visual.svg);
+    const hasVisual = !!(p.visual && (p.visual.html || p.visual.svg));
     const maxStep = principleMaxStep(p);
     if (ui.pStep < 0 || ui.pStep > maxStep) ui.pStep = 0;
 
@@ -2570,17 +2570,19 @@
       const sim = computeCutoffSim(t);
       simHtml = `
         <div class="principle-sim-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <span style="font-size:calc(13px + var(--fs-bump) * 0.4);font-weight:800;color:var(--text);">${fmtText(cfg.title)}</span>
-            <span id="p-thresh-val" style="font-size:calc(13px + var(--fs-bump) * 0.4);font-weight:800;color:var(--primary);white-space:nowrap;">${t.toFixed(2)}</span>
+          <div class="principle-sim-head">
+            <span class="principle-sim-title">${fmtText(cfg.title)}</span>
+            <span id="p-thresh-val" class="principle-sim-val">${t.toFixed(2)}</span>
           </div>
-          <svg viewBox="0 0 340 54" class="principle-svg">
-            <path d="M16 44 Q75 4 170 44" fill="rgba(148,163,184,0.22)" stroke="var(--muted)" stroke-width="1.5"/>
-            <path d="M150 44 Q245 4 324 44" fill="rgba(16,185,129,0.24)" stroke="var(--success)" stroke-width="1.5"/>
-            <line id="p-thresh-cut" x1="${sim.cutX}" y1="4" x2="${sim.cutX}" y2="48" stroke="var(--warn)" stroke-width="2.5" stroke-dasharray="4 2"/>
-            <text x="16" y="51" fill="var(--muted)" font-size="9.5">${fmtText(cfg.leftLabel)}</text>
-            <text x="324" y="51" text-anchor="end" fill="var(--success)" font-size="9.5">${fmtText(cfg.rightLabel)}</text>
+          <svg viewBox="0 0 280 54" class="principle-svg" aria-hidden="true">
+            <path d="M12 48 Q68 4 146 48" fill="rgba(148,163,184,0.22)" stroke="var(--muted)" stroke-width="1.8"/>
+            <path d="M128 48 Q204 4 268 48" fill="rgba(16,185,129,0.24)" stroke="var(--success)" stroke-width="1.8"/>
+            <line id="p-thresh-cut" x1="${sim.cutX}" y1="4" x2="${sim.cutX}" y2="52" stroke="var(--warn)" stroke-width="2.8" stroke-dasharray="4 2"/>
           </svg>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:-6px;">
+            <span class="viz-sub" style="font-weight:700;">${fmtText(cfg.leftLabel)}</span>
+            <span class="viz-sub viz-c-ok" style="font-weight:700;">${fmtText(cfg.rightLabel)}</span>
+          </div>
           <input id="p-thresh-slider" class="principle-sim-slider" type="range" min="0.15" max="0.85" step="0.05" value="${t}" aria-label="Adjust threshold cutoff" />
           <div class="principle-sim-grid">
             <div class="principle-sim-metric">
@@ -2592,7 +2594,7 @@
               <strong id="p-sim-b" style="color:var(--primary);">${sim.metricB}% (${sim.countB} ${fmtText(cfg.unitB)})</strong>
             </div>
           </div>
-          <div class="principle-visual-note" style="font-size:calc(13px + var(--fs-bump) * 0.45);">${fmtText(cfg.rule)}</div>
+          <div class="principle-sim-rule">${fmtText(cfg.rule)}</div>
         </div>
       `;
     }
@@ -2601,7 +2603,7 @@
       ? `
         <div class="principle-visual-box">
           <div class="principle-sec-label" style="color:var(--primary);margin-bottom:0;">🗺 ${fmtText(p.visual.title || 'MENTAL MODEL')}</div>
-          ${p.visual.svg}
+          ${p.visual.html || p.visual.svg}
           ${simHtml}
           ${p.visual.note ? `<div class="principle-visual-note">${fmtText(p.visual.note)}</div>` : ''}
         </div>
