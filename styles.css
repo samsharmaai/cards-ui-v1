@@ -963,6 +963,62 @@ html, body {
   color: var(--primary-fg);
 }
 
+.principle-visual-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 13px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.principle-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.principle-visual-note {
+  font-size: calc(14.5px + var(--fs-bump) * 0.6);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.principle-sim-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.principle-sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.principle-sim-metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 9px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: calc(13px + var(--fs-bump) * 0.4);
+  gap: 6px;
+}
+
+.principle-sim-slider {
+  width: 100%;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
 .p-view-toggle {
   display: inline-flex;
   border-radius: 10px;

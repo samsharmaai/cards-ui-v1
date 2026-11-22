@@ -81,6 +81,7 @@
     pIdx: 0,
     pView: 'step',
     pStep: 0,
+    pThreshold: 0.50,
     fontScale: loadFontScale(),
     timerOn: true,
     secLeft: 120,
@@ -1257,7 +1258,7 @@
         if (saved.pView === 'step' || saved.pView === 'full') {
           ui.pView = saved.pView;
         }
-        if (typeof saved.pStep === 'number' && saved.pStep >= 0 && saved.pStep <= 3) {
+        if (typeof saved.pStep === 'number' && saved.pStep >= 0 && saved.pStep <= 4) {
           ui.pStep = saved.pStep;
         }
         const validSets = getQuizSets();
@@ -2525,13 +2526,29 @@
     `;
   }
 
+  function principleMaxStep(p) {
+    return (p && p.visual && p.visual.svg) ? 4 : 3;
+  }
+
+  function computeCutoffSim(t) {
+    const metricA = Math.round(Math.max(24, Math.min(98, 108 - t * 92)));
+    const metricB = Math.round(Math.max(12, Math.min(94, 8 + t * 96)));
+    const countA = Math.round((100 - metricA) * 0.4);
+    const countB = Math.round((100 - metricB) * 1.4);
+    const cutX = Math.round(24 + ((t - 0.15) / 0.70) * 292);
+    return { metricA, metricB, countA, countB, cutX };
+  }
+
   function renderPrinciplesTab() {
     const list = DATA.principles || [];
     if (!list.length) return '';
     if (ui.pIdx >= list.length) ui.pIdx = 0;
-    if (ui.pStep < 0 || ui.pStep > 3) ui.pStep = 0;
 
     const p = list[ui.pIdx];
+    const hasVisual = !!(p.visual && p.visual.svg);
+    const maxStep = principleMaxStep(p);
+    if (ui.pStep < 0 || ui.pStep > maxStep) ui.pStep = 0;
+
     const isDone = !!progress.donePrinciples[p.id];
     const doneTotal = list.filter(item => !!progress.donePrinciples[item.id]).length;
     const allDone = doneTotal === list.length;
@@ -2545,6 +2562,51 @@
       if (idx === ui.pIdx) dCls += ' current';
       return `<div class="${dCls}" data-pdot="${idx}"></div>`;
     }).join('');
+
+    let simHtml = '';
+    if (p.interactive && p.interactive.type === 'threshold') {
+      const cfg = p.interactive;
+      const t = typeof ui.pThreshold === 'number' ? ui.pThreshold : 0.50;
+      const sim = computeCutoffSim(t);
+      simHtml = `
+        <div class="principle-sim-box">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span style="font-size:calc(13px + var(--fs-bump) * 0.4);font-weight:800;color:var(--text);">${fmtText(cfg.title)}</span>
+            <span id="p-thresh-val" style="font-size:calc(13px + var(--fs-bump) * 0.4);font-weight:800;color:var(--primary);white-space:nowrap;">${t.toFixed(2)}</span>
+          </div>
+          <svg viewBox="0 0 340 54" class="principle-svg">
+            <path d="M16 44 Q75 4 170 44" fill="rgba(148,163,184,0.22)" stroke="var(--muted)" stroke-width="1.5"/>
+            <path d="M150 44 Q245 4 324 44" fill="rgba(16,185,129,0.24)" stroke="var(--success)" stroke-width="1.5"/>
+            <line id="p-thresh-cut" x1="${sim.cutX}" y1="4" x2="${sim.cutX}" y2="48" stroke="var(--warn)" stroke-width="2.5" stroke-dasharray="4 2"/>
+            <text x="16" y="51" fill="var(--muted)" font-size="9.5">${fmtText(cfg.leftLabel)}</text>
+            <text x="324" y="51" text-anchor="end" fill="var(--success)" font-size="9.5">${fmtText(cfg.rightLabel)}</text>
+          </svg>
+          <input id="p-thresh-slider" class="principle-sim-slider" type="range" min="0.15" max="0.85" step="0.05" value="${t}" aria-label="Adjust threshold cutoff" />
+          <div class="principle-sim-grid">
+            <div class="principle-sim-metric">
+              <span style="color:var(--muted);">${fmtText(cfg.labelA)}</span>
+              <strong id="p-sim-a" style="color:var(--success);">${sim.metricA}% (${sim.countA} ${fmtText(cfg.unitA)})</strong>
+            </div>
+            <div class="principle-sim-metric">
+              <span style="color:var(--muted);">${fmtText(cfg.labelB)}</span>
+              <strong id="p-sim-b" style="color:var(--primary);">${sim.metricB}% (${sim.countB} ${fmtText(cfg.unitB)})</strong>
+            </div>
+          </div>
+          <div class="principle-visual-note" style="font-size:calc(13px + var(--fs-bump) * 0.45);">${fmtText(cfg.rule)}</div>
+        </div>
+      `;
+    }
+
+    const visualHtml = hasVisual
+      ? `
+        <div class="principle-visual-box">
+          <div class="principle-sec-label" style="color:var(--primary);margin-bottom:0;">🗺 ${fmtText(p.visual.title || 'MENTAL MODEL')}</div>
+          ${p.visual.svg}
+          ${simHtml}
+          ${p.visual.note ? `<div class="principle-visual-note">${fmtText(p.visual.note)}</div>` : ''}
+        </div>
+      `
+      : '';
 
     const groundTruthText = fmtText(p.groundTruth || p.intuition || '');
     const groundHtml = `
@@ -2588,7 +2650,9 @@
       </div>
     `;
 
-    const stepLabels = ['1. Ground Truth', '2. 5s Razor', '3. Build Up', '4. Traps'];
+    const stepLabels = hasVisual
+      ? ['🗺 Visual', '1. Ground', '2. 5s Razor', '3. Build Up', '4. Traps']
+      : ['1. Ground Truth', '2. 5s Razor', '3. Build Up', '4. Traps'];
     const stepPillsHtml = isStepView
       ? `<div class="p-step-bar">${stepLabels.map((lbl, idx) => `
           <button class="p-step-pill ${ui.pStep === idx ? 'active' : ''}" data-pstep="${idx}">${lbl}</button>
@@ -2597,12 +2661,21 @@
 
     let contentBodyHtml = '';
     if (isStepView) {
-      if (ui.pStep === 0) contentBodyHtml = groundHtml;
-      else if (ui.pStep === 1) contentBodyHtml = razorHtml || groundHtml;
-      else if (ui.pStep === 2) contentBodyHtml = buildUpHtml;
-      else contentBodyHtml = trapsBoxHtml;
+      if (hasVisual) {
+        if (ui.pStep === 0) contentBodyHtml = visualHtml;
+        else if (ui.pStep === 1) contentBodyHtml = groundHtml;
+        else if (ui.pStep === 2) contentBodyHtml = razorHtml || groundHtml;
+        else if (ui.pStep === 3) contentBodyHtml = buildUpHtml;
+        else contentBodyHtml = trapsBoxHtml;
+      } else {
+        if (ui.pStep === 0) contentBodyHtml = groundHtml;
+        else if (ui.pStep === 1) contentBodyHtml = razorHtml || groundHtml;
+        else if (ui.pStep === 2) contentBodyHtml = buildUpHtml;
+        else contentBodyHtml = trapsBoxHtml;
+      }
     } else {
       contentBodyHtml = `
+        ${visualHtml}
         ${groundHtml}
         ${razorHtml}
         ${buildUpHtml}
@@ -2620,8 +2693,8 @@
     let bottomBarHtml = '';
     if (isStepView) {
       const prevDisabled = ui.pIdx === 0 && ui.pStep === 0;
-      const centerStepBtn = ui.pStep < 3
-        ? `<button class="primary-btn" id="p-next-step">Next Block (${ui.pStep + 2}/4) →</button>`
+      const centerStepBtn = ui.pStep < maxStep
+        ? `<button class="primary-btn" id="p-next-step">Next Block (${ui.pStep + 2}/${maxStep + 1}) →</button>`
         : `<button class="success-btn" id="p-got-it">${isDone ? (ui.pIdx < list.length - 1 ? '✓ Done • Next →' : '✓ Understood') : '✓ Got It • Next'}</button>`;
       bottomBarHtml = `
         <div class="thumb-controls">
@@ -3454,8 +3527,33 @@
         });
       });
 
+      const threshSlider = document.getElementById('p-thresh-slider');
+      if (threshSlider) {
+        threshSlider.addEventListener('input', e => {
+          const list = DATA.principles || [];
+          const cur = list[ui.pIdx];
+          const cfg = cur && cur.interactive;
+          const t = Number(e.target.value);
+          ui.pThreshold = t;
+          const sim = computeCutoffSim(t);
+          const valEl = document.getElementById('p-thresh-val');
+          const cutEl = document.getElementById('p-thresh-cut');
+          const elA = document.getElementById('p-sim-a');
+          const elB = document.getElementById('p-sim-b');
+          if (valEl) valEl.textContent = t.toFixed(2);
+          if (cutEl) {
+            cutEl.setAttribute('x1', String(sim.cutX));
+            cutEl.setAttribute('x2', String(sim.cutX));
+          }
+          if (elA && cfg) elA.textContent = `${sim.metricA}% (${sim.countA} ${cfg.unitA})`;
+          if (elB && cfg) elB.textContent = `${sim.metricB}% (${sim.countB} ${cfg.unitB})`;
+        });
+      }
+
       document.getElementById('p-next-step')?.addEventListener('click', () => {
-        if (ui.pStep < 3) {
+        const list = DATA.principles || [];
+        const maxStep = principleMaxStep(list[ui.pIdx]);
+        if (ui.pStep < maxStep) {
           ui.pStep++;
           renderApp();
           scrollPrincipleTop();
@@ -3463,13 +3561,14 @@
       });
 
       document.getElementById('p-prev')?.addEventListener('click', () => {
+        const list = DATA.principles || [];
         if (ui.pView !== 'full' && ui.pStep > 0) {
           ui.pStep--;
           renderApp();
           scrollPrincipleTop();
         } else if (ui.pIdx > 0) {
           ui.pIdx--;
-          ui.pStep = ui.pView !== 'full' ? 3 : 0;
+          ui.pStep = ui.pView !== 'full' ? principleMaxStep(list[ui.pIdx]) : 0;
           renderApp();
           scrollPrincipleTop();
         }
@@ -3638,8 +3737,9 @@
         else if (dx > 0 && ui.qIdx > 0) { ui.qIdx--; ui.secLeft = 120; startQuizTimerIfNeeded(); renderApp(); }
       } else if (ui.tab === 'principles') {
         const list = DATA.principles || [];
+        const maxStep = principleMaxStep(list[ui.pIdx]);
         if (dx < 0) {
-          if (ui.pView !== 'full' && ui.pStep < 3) {
+          if (ui.pView !== 'full' && ui.pStep < maxStep) {
             ui.pStep++;
             renderApp();
             const box = document.getElementById('principle-card-box');
@@ -3659,7 +3759,7 @@
             if (box) box.scrollTop = 0;
           } else if (ui.pIdx > 0) {
             ui.pIdx--;
-            ui.pStep = ui.pView !== 'full' ? 3 : 0;
+            ui.pStep = ui.pView !== 'full' ? principleMaxStep(list[ui.pIdx]) : 0;
             renderApp();
             const box = document.getElementById('principle-card-box');
             if (box) box.scrollTop = 0;
