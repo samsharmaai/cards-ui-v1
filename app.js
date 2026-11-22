@@ -87,7 +87,7 @@
     timerHandle: null,
     didInitialResume: false,
     showTimeDrawer: false,
-    drawerTab: 'radar',
+    drawerTab: 'log',
     showSyncDrawer: false,
     showUtilMenu: false,
     showPasteBox: false,
@@ -471,7 +471,9 @@
       });
     }
 
-    return { streak, todayReps, todaySecs, totalSecs, studiedToday, week };
+    const displayStreak = studiedToday ? streak : (streak > 0 ? streak + 1 : 0);
+
+    return { streak, displayStreak, todayReps, todaySecs, totalSecs, studiedToday, week };
   }
 
   function markUserInteraction() {
@@ -545,12 +547,11 @@
       const chipEl = document.getElementById('streak-open-btn');
       const countEl = document.getElementById('streak-count-label');
       if (chipEl) chipEl.classList.remove('cold');
-      if (countEl) countEl.textContent = `🔥 ${stats.streak}d`;
-      const todayCircle = document.querySelector('.day-circle.today-ring');
-      if (todayCircle) {
-        todayCircle.classList.add('lit');
-        todayCircle.textContent = '✓';
-      }
+      if (countEl) countEl.innerHTML = `<span class="streak-fire">🔥</span> ${stats.displayStreak}d`;
+      const dFire = document.getElementById('drawer-streak-fire');
+      const dStreakVal = document.getElementById('drawer-streak-val');
+      if (dFire) dFire.classList.remove('cold');
+      if (dStreakVal) dStreakVal.style.color = 'var(--warn)';
       saveProgress(true);
     }
 
@@ -1407,7 +1408,7 @@
 
   function renderTimeDrawer(stats) {
     if (!ui.showTimeDrawer) return '';
-    const isRadar = ui.drawerTab !== 'log';
+    const isRadar = ui.drawerTab === 'radar';
     const diag = isRadar ? computeDiagnostics() : null;
 
     let bodyHtml = '';
@@ -1544,7 +1545,7 @@
           </div>
           <div class="drawer-stat-box">
             <span class="drawer-stat-label">STREAK</span>
-            <span class="drawer-stat-val" style="color:var(--warn);">🔥 ${stats.streak}d</span>
+            <span class="drawer-stat-val" id="drawer-streak-val" style="color:${stats.studiedToday ? 'var(--warn)' : 'var(--muted)'};"><span id="drawer-streak-fire" class="streak-fire ${stats.studiedToday ? '' : 'cold'}">🔥</span> ${stats.displayStreak}d</span>
           </div>
           <div class="drawer-stat-box">
             <span class="drawer-stat-label">TOTAL</span>
@@ -1565,13 +1566,13 @@
         <div class="drawer-sheet" role="dialog" aria-label="Progress and Diagnostics">
           <div class="drawer-handle"></div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <div style="font-size:calc(19px + var(--fs-bump) * 0.4);font-weight:800;">🔥 Progress & Radar</div>
+            <div style="font-size:calc(19px + var(--fs-bump) * 0.4);font-weight:800;">🔥 Study Log & Radar</div>
             <button class="icon-btn" id="drawer-close-btn" aria-label="Close" style="padding:7px 12px;font-size:15px;">✕</button>
           </div>
 
           <div class="drawer-seg" role="tablist">
-            <button class="drawer-seg-btn ${isRadar ? 'active' : ''}" data-drawer-tab="radar">🎯 Radar</button>
             <button class="drawer-seg-btn ${!isRadar ? 'active' : ''}" data-drawer-tab="log">🔥 Study Log</button>
+            <button class="drawer-seg-btn ${isRadar ? 'active' : ''}" data-drawer-tab="radar">🎯 Radar</button>
           </div>
 
           ${bodyHtml}
@@ -1989,8 +1990,8 @@
             <div class="brand-title">${DATA.appTitle}</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Progress & Weakness Radar">
-              <span id="streak-count-label">🔥 ${stats.streak}d</span>
+            <button class="streak-chip ${stats.studiedToday ? '' : 'cold'}" id="streak-open-btn" title="Study Log & Weakness Radar">
+              <span id="streak-count-label"><span class="streak-fire">🔥</span> ${stats.displayStreak}d</span>
             </button>
             <button class="util-btn" id="util-menu-btn" aria-label="Settings and Sync" title="Text size, sync, theme & lock">
               ⚙
@@ -2747,6 +2748,7 @@
       ui.picker = null;
       ui.showSyncDrawer = false;
       ui.showUtilMenu = false;
+      ui.drawerTab = 'log';
       ui.showTimeDrawer = true;
       renderApp();
     };
