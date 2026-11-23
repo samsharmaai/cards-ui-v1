@@ -634,6 +634,31 @@ html, body {
   opacity: 0.46;
 }
 
+.opt-btn.picked {
+  background: rgba(56, 189, 248, 0.13);
+  border-color: var(--primary);
+  font-weight: 600;
+}
+
+.opt-btn.picked .opt-keycap {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+
+.opt-btn.missed-correct {
+  background: var(--success-bg);
+  border-color: var(--success);
+  border-style: dashed;
+  font-weight: 600;
+}
+
+.opt-btn.missed-correct .opt-keycap {
+  background: transparent;
+  border-color: var(--success);
+  color: var(--success);
+}
+
 /* Checklist */
 .plan-item {
   display: flex;

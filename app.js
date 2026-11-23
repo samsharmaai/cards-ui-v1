@@ -909,6 +909,21 @@
     return out;
   }
 
+  function isMultiSelectQ(q) {
+    return !!(q && Array.isArray(q.ans));
+  }
+
+  function isQuizAnswerCorrect(q, chosen) {
+    if (!q || chosen === undefined || chosen === null) return false;
+    if (Array.isArray(q.ans)) {
+      if (!Array.isArray(chosen) || chosen.length !== q.ans.length) return false;
+      const a = [...q.ans].sort((x, y) => x - y);
+      const b = [...chosen].sort((x, y) => x - y);
+      return a.every((v, idx) => v === b[idx]);
+    }
+    return chosen === q.ans;
+  }
+
   function computeDiagnostics() {
     const secs = ['Sec 1', 'Sec 2', 'Sec 3', 'Sec 4', 'Sec 5', 'Sec 6'];
     const meta = (DATA && DATA.sectionMeta) || {};
@@ -945,7 +960,7 @@
       qs.forEach(q => {
         const st = getItemStat('q', q.id);
         const answered = progress.answers[q.id] !== undefined;
-        const isCorrectNow = answered && progress.answers[q.id] === q.ans;
+        const isCorrectNow = answered && isQuizAnswerCorrect(q, progress.answers[q.id]);
         const isActiveMissed = !!progress.missedQs[q.id];
         if (answered) {
           qTried++;
@@ -1653,7 +1668,7 @@
                 let cls = 'q-jump-pill';
                 let mark = '';
                 if (ans !== undefined) {
-                  if (ans === item.ans) { cls += ' done'; mark = '✓ '; }
+                  if (isQuizAnswerCorrect(item, ans)) { cls += ' done'; mark = '✓ '; }
                   else { cls += ' wrong'; mark = '✗ '; }
                 }
                 if (idx === ui.qIdx) cls += ' current';
@@ -2426,7 +2441,7 @@
     const isActiveMissed = !!progress.missedQs[q.id];
 
     const answeredList = qs.filter(item => progress.answers[item.id] !== undefined);
-    const rightCount = answeredList.filter(item => progress.answers[item.id] === item.ans).length;
+    const rightCount = answeredList.filter(item => isQuizAnswerCorrect(item, progress.answers[item.id])).length;
     const setComplete = ui.quizFilter !== 'MISSED' && ui.quizFilter !== 'WEAKEST' && qs.length > 0 && answeredList.length === qs.length;
     const hasOpenAnywhere = DATA.questions.some(item => progress.answers[item.id] === undefined);
     const showResumeBtn = chosen !== undefined && ui.quizFilter !== 'MISSED' && ui.quizFilter !== 'WEAKEST' && hasOpenAnywhere;
@@ -2442,7 +2457,7 @@
           let dCls = 'cdot';
           const ans = progress.answers[item.id];
           if (ans !== undefined) {
-            dCls += (ans === item.ans) ? ' done' : ' wrong';
+            dCls += isQuizAnswerCorrect(item, ans) ? ' done' : ' wrong';
           }
           if (idx === ui.qIdx) dCls += ' current';
           return `<div class="${dCls}" data-qdot="${idx}"></div>`;
@@ -2451,14 +2466,28 @@
            <div style="height:100%;width:${Math.round((answeredList.length / qs.length) * 100)}%;background:var(--success);transition:width .2s;"></div>
          </div>`;
 
+    const multi = isMultiSelectQ(q);
+    const reqCount = multi ? q.ans.length : 1;
+    const pendingMulti = (multi && ui.quizPendingMulti && Array.isArray(ui.quizPendingMulti[q.id])) ? ui.quizPendingMulti[q.id] : [];
     const optLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
     const optsHtml = q.opts.map((opt, idx) => {
       let cls = 'opt-btn';
       let cap = optLetters[idx] || String(idx + 1);
       if (chosen !== undefined) {
-        if (idx === q.ans) { cls += ' correct'; cap = '✓'; }
-        else if (idx === chosen) { cls += ' wrong'; cap = '✕'; }
-        else { cls += ' dim'; }
+        if (multi) {
+          const isAnsOpt = q.ans.includes(idx);
+          const wasPicked = Array.isArray(chosen) && chosen.includes(idx);
+          if (isAnsOpt && wasPicked) { cls += ' correct'; cap = '✓'; }
+          else if (isAnsOpt) { cls += ' missed-correct'; cap = '✓'; }
+          else if (wasPicked) { cls += ' wrong'; cap = '✕'; }
+          else { cls += ' dim'; }
+        } else {
+          if (idx === q.ans) { cls += ' correct'; cap = '✓'; }
+          else if (idx === chosen) { cls += ' wrong'; cap = '✕'; }
+          else { cls += ' dim'; }
+        }
+      } else if (multi && pendingMulti.includes(idx)) {
+        cls += ' picked';
       }
       return `
         <button class="${cls}" data-opt="${idx}">
@@ -2468,9 +2497,13 @@
       `;
     }).join('');
 
+    const multiSubmitHtml = (multi && chosen === undefined)
+      ? `<button class="primary-btn" id="submit-multi-q" ${pendingMulti.length === reqCount ? '' : 'disabled'}>${pendingMulti.length === reqCount ? `Submit ${reqCount} Choices` : `Select ${reqCount} Choices (${pendingMulti.length}/${reqCount})`}</button>`
+      : '';
+
     let qMasteryNoteHtml = '';
     if (chosen !== undefined) {
-      if (chosen !== q.ans) {
+      if (!isQuizAnswerCorrect(q, chosen)) {
         qMasteryNoteHtml = `<div style="margin-top:8px;font-size:12.5px;font-weight:700;color:var(--warn);">🔁 Added to Missed & Weakness Radar — 2 clean retries to clear</div>`;
       } else if (isActiveMissed) {
         qMasteryNoteHtml = `<div style="margin-top:8px;font-size:12.5px;font-weight:700;color:var(--primary);">✓ 1/2 clean retry — stays in Missed for 1 more pass to lock in</div>`;
@@ -2503,11 +2536,13 @@
       <div class="flat-scroll-card" id="quiz-card-box">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
           <span class="badge" style="${isActiveMissed ? 'color:var(--warn);' : ''}">${q.sec}${qTopicPart}${qRetryBadge}</span>
+          ${multi ? `<span class="badge" style="color:var(--primary);border-color:var(--primary);">Choose ${reqCount}</span>` : ''}
         </div>
         <div class="quiz-q">${fmtText(q.q)}</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
           ${optsHtml}
         </div>
+        ${multiSubmitHtml}
         ${chosen !== undefined ? `
           <div class="card-tip">
             <strong>Why:</strong> ${fmtText(q.exp)}
@@ -3369,34 +3404,61 @@
         renderApp();
       });
 
+      const finalizeQuizAnswer = (cur, pickedVal) => {
+        const isCorrect = isQuizAnswerCorrect(cur, pickedVal);
+        const wasMissed = !!progress.missedQs[cur.id];
+        const st = recordItemAttempt('q', cur.id, isCorrect);
+        progress.answers[cur.id] = pickedVal;
+        if (ui.quizPendingMulti) delete ui.quizPendingMulti[cur.id];
+        if (!ui.quizSessionTouched) ui.quizSessionTouched = {};
+        ui.quizSessionTouched[cur.id] = true;
+        if (!isCorrect) {
+          progress.missedQs[cur.id] = true;
+        } else if (wasMissed && st.streak < 2) {
+          progress.missedQs[cur.id] = true;
+        } else {
+          delete progress.missedQs[cur.id];
+        }
+        progress.qMeta[cur.id] = Date.now();
+        recordStudyAction(1);
+        clearInterval(ui.timerHandle);
+        renderApp();
+        requestAnimationFrame(() => {
+          const box = document.getElementById('quiz-card-box');
+          if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+        });
+      };
+
       document.querySelectorAll('[data-opt]').forEach(btn => {
         btn.addEventListener('click', () => {
           const qs = getActiveQuestions();
           const cur = qs[ui.qIdx];
           if (!cur || progress.answers[cur.id] !== undefined) return;
           const picked = Number(btn.dataset.opt);
-          const isCorrect = picked === cur.ans;
-          const wasMissed = !!progress.missedQs[cur.id];
-          const st = recordItemAttempt('q', cur.id, isCorrect);
-          progress.answers[cur.id] = picked;
-          if (!ui.quizSessionTouched) ui.quizSessionTouched = {};
-          ui.quizSessionTouched[cur.id] = true;
-          if (!isCorrect) {
-            progress.missedQs[cur.id] = true;
-          } else if (wasMissed && st.streak < 2) {
-            progress.missedQs[cur.id] = true;
-          } else {
-            delete progress.missedQs[cur.id];
+          if (isMultiSelectQ(cur)) {
+            if (!ui.quizPendingMulti) ui.quizPendingMulti = {};
+            const list = Array.isArray(ui.quizPendingMulti[cur.id]) ? ui.quizPendingMulti[cur.id].slice() : [];
+            const pos = list.indexOf(picked);
+            if (pos !== -1) {
+              list.splice(pos, 1);
+            } else if (list.length < cur.ans.length) {
+              list.push(picked);
+            }
+            ui.quizPendingMulti[cur.id] = list;
+            renderApp();
+            return;
           }
-          progress.qMeta[cur.id] = Date.now();
-          recordStudyAction(1);
-          clearInterval(ui.timerHandle);
-          renderApp();
-          requestAnimationFrame(() => {
-            const box = document.getElementById('quiz-card-box');
-            if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
-          });
+          finalizeQuizAnswer(cur, picked);
         });
+      });
+
+      document.getElementById('submit-multi-q')?.addEventListener('click', () => {
+        const qs = getActiveQuestions();
+        const cur = qs[ui.qIdx];
+        if (!cur || !isMultiSelectQ(cur) || progress.answers[cur.id] !== undefined) return;
+        const list = (ui.quizPendingMulti && Array.isArray(ui.quizPendingMulti[cur.id])) ? ui.quizPendingMulti[cur.id] : [];
+        if (list.length !== cur.ans.length) return;
+        finalizeQuizAnswer(cur, [...list].sort((a, b) => a - b));
       });
 
       document.getElementById('retry-q')?.addEventListener('click', () => {
@@ -3404,6 +3466,7 @@
         const cur = qs[ui.qIdx];
         if (!cur) return;
         delete progress.answers[cur.id];
+        if (ui.quizPendingMulti) delete ui.quizPendingMulti[cur.id];
         progress.qMeta[cur.id] = Date.now();
         saveProgress(true);
         ui.secLeft = 120;
