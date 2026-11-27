@@ -2307,10 +2307,9 @@
       <div class="card-dots">${dotsHtml}</div>
 
       <div class="duel-stage">
-        <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}" id="duel-prompt-box" style="${answered ? 'cursor:pointer;' : ''}">
+        <div class="duel-prompt-card ${isMastered ? 'done-card' : ''}" id="duel-prompt-box">
           <span class="badge" style="${isMastered ? 'color:var(--success);' : (isTricky ? 'color:var(--warn);' : '')}">${isMastered ? '✓ ' : ''}${d.sec}${topicPart} • ${ui.duelIdx + 1}/${list.length}${retryTag}</span>
           <div class="duel-prompt-text">${fmtText(d.prompt)}</div>
-          ${answered ? `<div style="font-size:12.5px;font-weight:700;color:var(--primary);margin-top:2px;">👆 Tap card for next duel</div>` : ''}
         </div>
 
         <div style="display:flex;flex-direction:column;gap:10px;">
@@ -3356,7 +3355,6 @@
             renderApp();
           }
         };
-        document.getElementById('duel-prompt-box')?.addEventListener('click', advanceAnsweredDuel);
         document.getElementById('duel-feedback-box')?.addEventListener('click', advanceAnsweredDuel);
 
         document.getElementById('duel-finish-round')?.addEventListener('click', () => {
